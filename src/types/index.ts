@@ -44,6 +44,7 @@ export type Job = {
   payment_intent_id?: string;
   created_at: string;
   owner_uid?: string;
+  owner_name?: string;   // ✅ ADD THIS LINE
   amount_total?: number;
   damage_confirmed?: boolean;
 };
