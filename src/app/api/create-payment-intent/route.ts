@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/admin';
 import { stripe } from '@/lib/stripe';
 
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
 export async function POST(req: NextRequest) {
   const { jobId } = await req.json();
   const jobSnap = await adminDb.collection('jobs').doc(jobId).get();
