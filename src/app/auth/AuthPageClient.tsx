@@ -1,6 +1,6 @@
 'use client';
 
-import { DEMO_USER_KEY } from '@/lib/demoAuth';
+import { DEMO_PLAYER, DEMO_STRINGER, DEMO_USER_KEY } from '@/lib/demoAuth';
 import { seedDemoUser } from '@/lib/demoData';
 import type { AppUser } from '@/types';
 import { useSearchParams } from 'next/navigation';
@@ -34,35 +34,11 @@ export default function AuthPageClient() {
         <h1 className="h2">Demo access</h1>
         <p className="p">OTP is skipped for MVP testing. Pick a demo role and continue the full client flow instantly.</p>
 
-        <button
-          className="btn"
-          onClick={() =>
-            continueAs({
-              uid: 'demo-player',
-              name: 'Demo Player',
-              phone: '+10000000000',
-              user_role: 'PLAYER',
-              shop_id: null,
-            })
-          }
-          disabled={loading !== null}
-        >
+        <button className="btn" onClick={() => continueAs(DEMO_PLAYER)} disabled={loading !== null}>
           {loading === 'PLAYER' ? 'Entering player app...' : 'Continue as Demo Player'}
         </button>
 
-        <button
-          className="btn secondary"
-          onClick={() =>
-            continueAs({
-              uid: 'demo-stringer',
-              name: 'Demo Stringer',
-              phone: '+10000000001',
-              user_role: 'STRINGER',
-              shop_id: 'demo-shop-1',
-            })
-          }
-          disabled={loading !== null}
-        >
+        <button className="btn secondary" onClick={() => continueAs(DEMO_STRINGER)} disabled={loading !== null}>
           {loading === 'STRINGER' ? 'Entering stringer portal...' : 'Continue as Demo Stringer'}
         </button>
 

@@ -1,12 +1,13 @@
 'use client';
 
+import Link from 'next/link';
 import { useCurrentUser } from '@/components/RoleGate';
 import { StatusPill } from '@/components/StatusPill';
-import { addAlert, clearDemoData, formatJobCode, getShop, listJobsByShop, updateJob, updateShop } from '@/lib/demoData';
+import { addAlert, clearDemoData, formatJobCode, getPendingPayoutTotal, getShop, listJobsByShop, updateJob, updateShop } from '@/lib/demoData';
 import { clearDemoUser } from '@/lib/demoAuth';
 import { useEffect, useMemo, useState } from 'react';
 
-const tabs = ['RECEIVED', 'IN_PROGRESS', 'FINISHED'] as const;
+const tabs = ['RECEIVED', 'IN_PROGRESS', 'FINISHED', 'PAID'] as const;
 
 export default function StringerDashboard() {
   const { user, loading } = useCurrentUser();
@@ -30,10 +31,21 @@ export default function StringerDashboard() {
   }
 
   useEffect(() => {
+    if (user?.user_role !== 'STRINGER') return;
     refreshData();
-  }, [effectiveShopId]);
+
+    const onStorage = () => refreshData();
+    window.addEventListener('storage', onStorage);
+    const timer = window.setInterval(() => refreshData(), 1200);
+
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.clearInterval(timer);
+    };
+  }, [effectiveShopId, user]);
 
   const filtered = useMemo(() => jobs.filter((job) => job.status === activeTab), [jobs, activeTab]);
+  const pendingPayout = useMemo(() => getPendingPayoutTotal(effectiveShopId), [jobs, effectiveShopId]);
 
   async function saveInspection() {
     if (!selectedJob) return;
@@ -52,10 +64,10 @@ export default function StringerDashboard() {
     if (damage) {
       addAlert({ type: 'damage', job_id: selectedJob.job_id, created_at: new Date().toISOString() });
       setMessage(`Inspection saved for job ${formatJobCode(selectedJob.job_id)}. Damage flagged, job kept in progress.`);
+      setActiveTab('IN_PROGRESS');
     } else {
-      const shop = getShop(effectiveShopId);
-      updateShop(effectiveShopId, { wallet_balance: (shop?.wallet_balance || 0) + 29.65 });
-      setMessage(`Inspection passed for job ${formatJobCode(selectedJob.job_id)}. Job moved to finished.`);
+      setMessage(`Inspection passed for job ${formatJobCode(selectedJob.job_id)}. Job is finished and now waiting for player payment.`);
+      setActiveTab('FINISHED');
     }
     setUploading(false);
     setSelectedJob(null);
@@ -66,12 +78,17 @@ export default function StringerDashboard() {
   async function markInProgress(jobId: string) {
     updateJob(jobId, { status: 'IN_PROGRESS' });
     setMessage(`Job ${formatJobCode(jobId)} moved to in progress.`);
+    setActiveTab('IN_PROGRESS');
     refreshData();
   }
 
   async function withdraw() {
+    if (!wallet) {
+      setMessage('No funds available yet. Complete jobs must be paid before withdrawal.');
+      return;
+    }
     updateShop(effectiveShopId, { wallet_balance: 0 });
-    setMessage('Demo withdrawal completed. Wallet reset to $0.00.');
+    setMessage(`Withdrawal completed for $${wallet.toFixed(2)}.`);
     refreshData();
   }
 
@@ -83,6 +100,33 @@ export default function StringerDashboard() {
 
   if (loading) return <main className="container"><div className="card">Loading...</div></main>;
 
+  if (!user) {
+    return (
+      <main className="container">
+        <div className="card grid">
+          <h1 className="h2">Stringer portal</h1>
+          <p className="p">Please log in as a stringer to manage the restring queue and withdraw paid earnings.</p>
+          <Link className="btn" href="/auth?next=/stringer">Log in as stringer</Link>
+        </div>
+      </main>
+    );
+  }
+
+  if (user.user_role !== 'STRINGER') {
+    return (
+      <main className="container">
+        <div className="card grid">
+          <h1 className="h2">Stringer portal only</h1>
+          <p className="p">This area is only for stringers. Your current session is signed in as a player.</p>
+          <div className="row wrap">
+            <Link className="btn" href="/auth?next=/stringer">Switch to stringer</Link>
+            <Link className="btn secondary" href="/player">Go to player portal</Link>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="container grid">
       <div className="card grid">
@@ -90,19 +134,25 @@ export default function StringerDashboard() {
         <div className="row between">
           <div>
             <h1 className="h2">Queue + inspection</h1>
-            <p className="p">Demo mode uses local storage for instant client-side testing. Jobs from the demo player appear here automatically.</p>
+            <p className="p">Players drop off racquets first. Once you finish the job, the player pays before pickup. Only paid jobs increase the withdrawable wallet.</p>
           </div>
           <div className="badge green">Wallet ${wallet.toFixed(2)}</div>
         </div>
+        <div className="card grid">
+          <div className="row between"><span className="small">Withdrawable balance</span><strong>${wallet.toFixed(2)}</strong></div>
+          <div className="row between"><span className="small">Paid jobs ready to withdraw</span><strong>${pendingPayout.toFixed(2)}</strong></div>
+          <div className="row between"><span className="small">Platform fee per job</span><strong>$0.35</strong></div>
+        </div>
         <div className="row wrap">
-          <button className="btn secondary" onClick={withdraw}>Withdraw</button>
+          <button className="btn secondary" onClick={withdraw} disabled={!wallet}>Withdraw</button>
           <button className="btn ghost" onClick={resetDemo}>Reset demo data</button>
         </div>
+        {!wallet ? <div className="small">No funds available yet. Complete jobs must be paid before withdrawal.</div> : null}
         {message ? <div className="notice success">{message}</div> : null}
       </div>
 
       <div className="card grid">
-        <div className="tabbar">
+        <div className="tabbar four">
           {tabs.map((tab) => (
             <div key={tab} className={`tab ${activeTab === tab ? 'active' : ''}`} onClick={() => setActiveTab(tab)}>{tab.replace('_', ' ')}</div>
           ))}
@@ -116,9 +166,12 @@ export default function StringerDashboard() {
               </div>
               <div className="small">Racquet: {job.racquet_id}</div>
               <div className="small">Owner: {job.owner_name || 'Demo Player'}</div>
+              <div className="small">{job.status === 'PAID' ? 'Paid by player' : 'Job total'}: ${Number(job.amount_total || 30).toFixed(2)}</div>
+              {job.status === 'FINISHED' ? <div className="small">Waiting for player payment before this amount moves into the wallet.</div> : null}
+              {job.status === 'PAID' ? <div className="notice success">Paid successfully. Net payout is ready to withdraw.</div> : null}
               <div className="row wrap">
                 {job.status === 'RECEIVED' ? <button className="btn secondary" onClick={() => void markInProgress(job.job_id)}>Start</button> : null}
-                {job.status !== 'FINISHED' ? <button className="btn" onClick={() => setSelectedJob(job)}>Inspect</button> : null}
+                {job.status !== 'FINISHED' && job.status !== 'PAID' ? <button className="btn" onClick={() => setSelectedJob(job)}>Inspect</button> : null}
               </div>
             </div>
           ))}

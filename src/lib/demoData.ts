@@ -62,7 +62,15 @@ export function seedDemoUser(user: AppUser) {
 
 export function ensureDemoShop(shop: Shop) {
   const shops = readJson<Shop[]>(KEYS.shops, []);
-  const next = [...shops.filter((s) => s.shop_id !== shop.shop_id), shop];
+  const current = shops.find((s) => s.shop_id === shop.shop_id);
+  const next = [
+    ...shops.filter((s) => s.shop_id !== shop.shop_id),
+    {
+      ...shop,
+      wallet_balance: current?.wallet_balance ?? shop.wallet_balance,
+      stripe_account_id: current?.stripe_account_id ?? shop.stripe_account_id,
+    },
+  ];
   writeJson(KEYS.shops, next);
 }
 
@@ -82,6 +90,10 @@ export function updateShop(shopId: string, patch: Partial<Shop>) {
   return nextShop;
 }
 
+export function getRacquetById(racquetId: string) {
+  return readJson<Racquet[]>(KEYS.racquets, []).find((racquet) => racquet.racquet_id === racquetId) || null;
+}
+
 export function getRacquetByTagOwner(tagId: string, ownerUid: string) {
   return (
     readJson<Racquet[]>(KEYS.racquets, []).find(
@@ -99,6 +111,12 @@ export function saveRacquet(racquet: Racquet & { owner_name?: string | null }) {
   const next = [...racquets.filter((item) => item.racquet_id !== racquet.racquet_id), racquet];
   writeJson(KEYS.racquets, next);
   return racquet;
+}
+
+export function updateRacquet(racquetId: string, patch: Partial<Racquet & { owner_name?: string | null }>) {
+  const current = getRacquetById(racquetId) as (Racquet & { owner_name?: string | null }) | null;
+  if (!current) return null;
+  return saveRacquet({ ...current, ...patch });
 }
 
 export function createRacquet(input: {
@@ -129,6 +147,20 @@ export function listJobsByShop(shopId: string) {
   return readJson<Job[]>(KEYS.jobs, []).filter((job) => job.shop_id === shopId);
 }
 
+export function listJobsByRacquet(racquetId: string) {
+  return readJson<Job[]>(KEYS.jobs, []).filter((job) => job.racquet_id === racquetId);
+}
+
+export function getLatestJobForRacquet(racquetId: string) {
+  return listJobsByRacquet(racquetId).sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0] || null;
+}
+
+export function getOpenJobForRacquet(racquetId: string) {
+  return listJobsByRacquet(racquetId)
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+    .find((job) => ['RECEIVED', 'IN_PROGRESS', 'FINISHED'].includes(job.status)) || null;
+}
+
 export function getJob(jobId: string) {
   return readJson<Job[]>(KEYS.jobs, []).find((job) => job.job_id === jobId) || null;
 }
@@ -141,6 +173,11 @@ export function createJob(input: {
   amount_total: number;
   status?: JobStatus;
 }) {
+  const existingOpen = getOpenJobForRacquet(input.racquet_id);
+  if (existingOpen) {
+    return existingOpen;
+  }
+
   const job: Job = {
     job_id: uid('job'),
     racquet_id: input.racquet_id,
@@ -173,6 +210,38 @@ export function updateJob(jobId: string, patch: Partial<Job>) {
 export function addAlert(payload: Record<string, unknown>) {
   const alerts = readJson<any[]>(KEYS.alerts, []);
   writeJson(KEYS.alerts, [{ id: uid('alert'), ...payload }, ...alerts]);
+}
+
+export function getStringerNetForJob(job: Pick<Job, 'amount_total'>) {
+  return Math.max(0, Number(job.amount_total || 0) - 0.35);
+}
+
+export function markJobPaid(jobId: string) {
+  const job = getJob(jobId);
+  if (!job || job.status === 'PAID') return job;
+  const net = getStringerNetForJob(job);
+  const shop = getShop(job.shop_id);
+  if (shop) {
+    updateShop(job.shop_id, {
+      wallet_balance: Number(shop.wallet_balance || 0) + net,
+    });
+  }
+
+  const racquet = getRacquetById(job.racquet_id);
+  if (racquet) {
+    updateRacquet(job.racquet_id, {
+      restring_count: Number(racquet.restring_count || 0) + 1,
+      last_string_date: new Date().toISOString(),
+    });
+  }
+
+  return updateJob(jobId, { status: 'PAID' });
+}
+
+export function getPendingPayoutTotal(shopId: string) {
+  return listJobsByShop(shopId)
+    .filter((job) => job.status === 'PAID')
+    .reduce((sum, job) => sum + getStringerNetForJob(job), 0);
 }
 
 export function completeJobForPayment(jobId: string) {
