@@ -1,0 +1,22 @@
+{
+  "name": "StringGlobe MVP",
+  "short_name": "StringGlobe",
+  "description": "Zero-friction digital racquet stringing MVP",
+  "display": "standalone",
+  "background_color": "#071227",
+  "theme_color": "#071227",
+  "start_url": "/",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 'use client';
 
-import type { AppUser, Job, JobStatus, Racquet, Shop } from '@/types';
+import type { AppUser, Job, JobSource, JobStatus, Racquet, Shop } from '@/types';
+import { resetSharedDemoState, syncSharedDemoKey } from './sharedDemoSync';
 
 const KEYS = {
   users: 'stringglobe_demo_users',
@@ -27,6 +28,7 @@ function readJson<T>(key: string, fallback: T): T {
 function writeJson<T>(key: string, value: T) {
   if (!canUseStorage()) return;
   window.localStorage.setItem(key, JSON.stringify(value));
+  void syncSharedDemoKey(key, value);
 }
 
 function uid(prefix: string) {
@@ -42,6 +44,7 @@ export function clearDemoData() {
   if (!canUseStorage()) return;
   Object.values(KEYS).forEach((key) => window.localStorage.removeItem(key));
   window.sessionStorage.removeItem('stringglobe_pending_scan');
+  void resetSharedDemoState();
 }
 
 export function seedDemoUser(user: AppUser) {
@@ -83,10 +86,7 @@ export function updateShop(shopId: string, patch: Partial<Shop>) {
   const current = shops.find((shop) => shop.shop_id === shopId);
   if (!current) return null;
   const nextShop = { ...current, ...patch };
-  writeJson(
-    KEYS.shops,
-    shops.map((shop) => (shop.shop_id === shopId ? nextShop : shop))
-  );
+  writeJson(KEYS.shops, shops.map((shop) => (shop.shop_id === shopId ? nextShop : shop)));
   return nextShop;
 }
 
@@ -95,11 +95,11 @@ export function getRacquetById(racquetId: string) {
 }
 
 export function getRacquetByTagOwner(tagId: string, ownerUid: string) {
-  return (
-    readJson<Racquet[]>(KEYS.racquets, []).find(
-      (racquet) => racquet.tag_id === tagId && racquet.owner_uid === ownerUid
-    ) || null
-  );
+  return readJson<Racquet[]>(KEYS.racquets, []).find((racquet) => racquet.tag_id === tagId && racquet.owner_uid === ownerUid) || null;
+}
+
+export function getRacquetByTag(tagId: string) {
+  return readJson<any[]>(KEYS.racquets, []).find((racquet) => racquet.tag_id === tagId) || null;
 }
 
 export function listRacquetsByOwner(ownerUid: string) {
@@ -158,7 +158,7 @@ export function getLatestJobForRacquet(racquetId: string) {
 export function getOpenJobForRacquet(racquetId: string) {
   return listJobsByRacquet(racquetId)
     .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
-    .find((job) => ['RECEIVED', 'IN_PROGRESS', 'FINISHED'].includes(job.status)) || null;
+    .find((job) => ['REQUESTED', 'RECEIVED', 'IN_PROGRESS', 'FINISHED'].includes(job.status)) || null;
 }
 
 export function getJob(jobId: string) {
@@ -172,6 +172,7 @@ export function createJob(input: {
   shop_id: string;
   amount_total: number;
   status?: JobStatus;
+  request_source?: JobSource;
 }) {
   const existingOpen = getOpenJobForRacquet(input.racquet_id);
   if (existingOpen) {
@@ -184,11 +185,13 @@ export function createJob(input: {
     owner_uid: input.owner_uid,
     owner_name: input.owner_name,
     shop_id: input.shop_id,
-    status: input.status || 'RECEIVED',
+    status: input.status || 'REQUESTED',
     created_at: new Date().toISOString(),
     amount_total: input.amount_total,
     payment_intent_id: '',
     damage_confirmed: true,
+    request_source: input.request_source || 'PLAYER_PORTAL',
+    payout_released: false,
   };
   const jobs = readJson<Job[]>(KEYS.jobs, []);
   writeJson(KEYS.jobs, [job, ...jobs]);
@@ -210,6 +213,15 @@ export function updateJob(jobId: string, patch: Partial<Job>) {
 export function addAlert(payload: Record<string, unknown>) {
   const alerts = readJson<any[]>(KEYS.alerts, []);
   writeJson(KEYS.alerts, [{ id: uid('alert'), ...payload }, ...alerts]);
+}
+
+export function listAlerts() {
+  return readJson<any[]>(KEYS.alerts, []);
+}
+
+export function markAlertsReadForJob(jobId: string) {
+  const alerts = readJson<any[]>(KEYS.alerts, []);
+  writeJson(KEYS.alerts, alerts.map((alert) => (alert.job_id === jobId ? { ...alert, read: true } : alert)));
 }
 
 export function getStringerNetForJob(job: Pick<Job, 'amount_total'>) {
@@ -240,7 +252,7 @@ export function markJobPaid(jobId: string) {
 
 export function getPendingPayoutTotal(shopId: string) {
   return listJobsByShop(shopId)
-    .filter((job) => job.status === 'PAID')
+    .filter((job) => job.status === 'PAID' && !job.payout_released)
     .reduce((sum, job) => sum + getStringerNetForJob(job), 0);
 }
 

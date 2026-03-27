@@ -1,80 +1,49 @@
 'use client';
 
-import { auth, db } from '@/lib/firebase';
-import { addDoc, collection, doc, setDoc } from 'firebase/firestore';
+import Link from 'next/link';
+import { ArrowRight, ScanLine, Sparkles, Workflow } from 'lucide-react';
+import { useCurrentUser } from '@/components/RoleGate';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
 export default function OnboardingPage() {
   const router = useRouter();
-  const [role, setRole] = useState<'PLAYER' | 'STRINGER'>('PLAYER');
-  const [name, setName] = useState('');
-  const [shopName, setShopName] = useState('');
-  const [laborRate, setLaborRate] = useState('30');
-  const [loading, setLoading] = useState(false);
+  const { user, loading } = useCurrentUser();
+  const [tagId, setTagId] = useState('globetag-001');
 
-  async function handleSubmit() {
-    const current = auth.currentUser;
-    if (!current) {
-      router.push('/auth');
-      return;
-    }
-    setLoading(true);
-    let shopId: string | null = null;
-    if (role === 'STRINGER') {
-      const shopRef = await addDoc(collection(db, 'shops'), {
-        name: shopName,
-        labor_rate: Number(laborRate),
-        owner_uid: current.uid,
-        wallet_balance: 0,
-      });
-      shopId = shopRef.id;
-      await setDoc(doc(db, 'shops', shopId), {
-        shop_id: shopId,
-        name: shopName,
-        labor_rate: Number(laborRate),
-        owner_uid: current.uid,
-        wallet_balance: 0,
-      });
-    }
-    await setDoc(doc(db, 'users', current.uid), {
-      uid: current.uid,
-      user_role: role,
-      name,
-      phone: current.phoneNumber,
-      shop_id: shopId,
-    });
-    router.push(role === 'STRINGER' ? '/stringer' : '/player');
-  }
+  if (loading) return <main className="container"><div className="card">Loading…</div></main>;
+  if (!user) return <main className="container"><div className="card grid"><h1 className="h2">Sign in to scan a GlobeTag</h1><p className="p">Use your secure account to add racquets to your bag or open a new string job request.</p><Link className="btn" href="/auth?mode=signin&role=PLAYER">Sign in</Link></div></main>;
 
   return (
-    <main className="container">
-      <div className="card grid">
-        <span className="kicker">Fast onboarding</span>
-        <h1 className="h2">Create your StringGlobe profile</h1>
-        <div className="tabbar">
-          <div className={`tab ${role === 'PLAYER' ? 'active' : ''}`} onClick={() => setRole('PLAYER')}>Player</div>
-          <div className={`tab ${role === 'STRINGER' ? 'active' : ''}`} onClick={() => setRole('STRINGER')}>Stringer</div>
-          <div className="tab">~2 min</div>
+    <main className="container shell premium-shell">
+      <section className="hero hero-premium scan-hero">
+        <div className="hero-inner premium-hero-inner">
+          <span className="kicker">GlobeTag scan</span>
+          <h1 className="h1">Add a racquet or request service in one premium flow.</h1>
+          <p className="p lead">This streamlined scan experience is designed around three moments: tag detection, setup confirmation, and handoff into the restring queue.</p>
+          <div className="scan-steps-preview">
+            <div className="scan-step-card"><ScanLine size={18} /><strong>Scan</strong><span>Enter the GlobeTag or simulate the NFC scan.</span></div>
+            <div className="scan-step-card"><Sparkles size={18} /><strong>Confirm</strong><span>Review saved string setup or register a brand-new racquet.</span></div>
+            <div className="scan-step-card"><Workflow size={18} /><strong>Request</strong><span>Existing racquets move directly into the live service queue.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section className="card grid strong section-card scan-shell-card" style={{ maxWidth: 760 }}>
+        <div className="section-heading">
+          <span className="kicker">Step 1</span>
+          <h2 className="h2">Scan or enter GlobeTag</h2>
+          <p className="p">For the current build, enter the tag manually to simulate an NFC or QR scan.</p>
         </div>
         <div>
-          <label className="label">Full name</label>
-          <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
+          <label className="label">GlobeTag ID</label>
+          <input className="input" value={tagId} onChange={(e) => setTagId(e.target.value)} placeholder="globe-tag-001" />
         </div>
-        {role === 'STRINGER' ? (
-          <>
-            <div>
-              <label className="label">Shop name</label>
-              <input className="input" value={shopName} onChange={(e) => setShopName(e.target.value)} />
-            </div>
-            <div>
-              <label className="label">Labor rate</label>
-              <input className="input" value={laborRate} onChange={(e) => setLaborRate(e.target.value)} />
-            </div>
-          </>
-        ) : null}
-        <button className="btn" onClick={handleSubmit} disabled={loading}>{loading ? 'Saving...' : 'Continue'}</button>
-      </div>
+        <div className="inline-actions">
+          <button className="btn small-btn" onClick={() => router.push(`/scan/${encodeURIComponent(tagId.trim())}`)}>Continue to scan result <ArrowRight size={16} /></button>
+          <Link className="btn secondary small-btn" href="/player">Back to player portal</Link>
+        </div>
+      </section>
     </main>
   );
 }

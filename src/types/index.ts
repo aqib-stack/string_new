@@ -27,7 +27,8 @@ export type Racquet = {
   tension: string;
 };
 
-export type JobStatus = 'RECEIVED' | 'IN_PROGRESS' | 'FINISHED' | 'PAID' | 'PICKED_UP';
+export type JobStatus = 'REQUESTED' | 'RECEIVED' | 'IN_PROGRESS' | 'FINISHED' | 'PAID' | 'PICKED_UP';
+export type JobSource = 'PLAYER_SCAN' | 'PLAYER_PORTAL' | 'STRINGER_SCAN';
 
 export type Job = {
   job_id: string;
@@ -44,7 +45,9 @@ export type Job = {
   payment_intent_id?: string;
   created_at: string;
   owner_uid?: string;
-  owner_name?: string;   // ✅ ADD THIS LINE
+  owner_name?: string;
   amount_total?: number;
   damage_confirmed?: boolean;
+  request_source?: JobSource;
+  payout_released?: boolean;
 };

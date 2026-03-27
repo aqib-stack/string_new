@@ -1,0 +1,24 @@
+<svg width="1200" height="800" viewBox="0 0 1200 800" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="800" rx="36" fill="#061321"/>
+  <rect x="40" y="40" width="1120" height="720" rx="28" fill="url(#paint0_radial)" fill-opacity="0.85"/>
+  <circle cx="940" cy="164" r="84" fill="#E8F4FF" fill-opacity="0.16"/>
+  <circle cx="1000" cy="220" r="18" fill="#B4F1FF"/>
+  <path d="M256 126C204.86 177.14 204.86 260.06 256 311.2L432.8 488C483.94 539.14 566.86 539.14 618 488C669.14 436.86 669.14 353.94 618 302.8L441.2 126C390.06 74.86 307.14 74.86 256 126Z" stroke="#C9F7FF" stroke-width="28"/>
+  <path d="M380 250L494 136" stroke="#C9F7FF" stroke-opacity="0.7" stroke-width="18" stroke-linecap="round"/>
+  <path d="M594 464L706 576" stroke="#C9F7FF" stroke-opacity="0.7" stroke-width="18" stroke-linecap="round"/>
+  <path d="M640 520L880 760" stroke="#7EF0FF" stroke-width="26" stroke-linecap="round"/>
+  <rect x="860" y="710" width="156" height="34" rx="17" transform="rotate(45 860 710)" fill="#1DD1F3"/>
+  <path d="M300 170L570 440" stroke="#7EF0FF" stroke-opacity="0.45" stroke-width="6"/>
+  <path d="M338 132L608 402" stroke="#7EF0FF" stroke-opacity="0.45" stroke-width="6"/>
+  <path d="M262 208L532 478" stroke="#7EF0FF" stroke-opacity="0.45" stroke-width="6"/>
+  <path d="M262 438L532 168" stroke="#7EF0FF" stroke-opacity="0.45" stroke-width="6"/>
+  <path d="M300 476L570 206" stroke="#7EF0FF" stroke-opacity="0.45" stroke-width="6"/>
+  <path d="M338 514L608 244" stroke="#7EF0FF" stroke-opacity="0.45" stroke-width="6"/>
+  <defs>
+    <radialGradient id="paint0_radial" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(938 141) rotate(139.665) scale(1044.39 876.878)">
+      <stop stop-color="#153B62"/>
+      <stop offset="0.527668" stop-color="#0A1A2E"/>
+      <stop offset="1" stop-color="#061321"/>
+    </radialGradient>
+  </defs>
+</svg>

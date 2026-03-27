@@ -1,194 +1,301 @@
 'use client';
 
 import Link from 'next/link';
+import { BellRing, CheckCircle2, ClipboardList, LogOut, ScanLine, ShieldCheck, Wallet } from 'lucide-react';
 import { useCurrentUser } from '@/components/RoleGate';
 import { StatusPill } from '@/components/StatusPill';
-import { addAlert, clearDemoData, formatJobCode, getPendingPayoutTotal, getShop, listJobsByShop, updateJob, updateShop } from '@/lib/demoData';
-import { clearDemoUser } from '@/lib/demoAuth';
+import { logoutUser } from '@/lib/authHelpers';
+import {
+  addAlert,
+  createJob,
+  formatJobCode,
+  getPendingPayoutTotal,
+  getRacquetByTag,
+  getShop,
+  listAlerts,
+  listJobsByShop,
+  markAlertsReadForJob,
+  updateJob,
+  updateShop,
+} from '@/lib/demoData';
 import { useEffect, useMemo, useState } from 'react';
 
-const tabs = ['RECEIVED', 'IN_PROGRESS', 'FINISHED', 'PAID'] as const;
+const tabs = ['REQUESTED', 'RECEIVED', 'IN_PROGRESS', 'FINISHED', 'PAID'] as const;
+const tabLabels: Record<(typeof tabs)[number], string> = {
+  REQUESTED: 'Requested',
+  RECEIVED: 'Received',
+  IN_PROGRESS: 'In progress',
+  FINISHED: 'Finished',
+  PAID: 'Paid',
+};
 
-export default function StringerDashboard() {
+export default function StringerPage() {
   const { user, loading } = useCurrentUser();
   const [jobs, setJobs] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<(typeof tabs)[number]>('RECEIVED');
+  const [alerts, setAlerts] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<(typeof tabs)[number]>('REQUESTED');
   const [selectedJob, setSelectedJob] = useState<any | null>(null);
+  const [scanTag, setScanTag] = useState('globetag-001');
   const [frame, setFrame] = useState(true);
   const [grommets, setGrommets] = useState(true);
   const [grip, setGrip] = useState(true);
   const [file, setFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [wallet, setWallet] = useState(0);
   const [message, setMessage] = useState('');
 
-  const effectiveShopId = user?.shop_id || 'demo-shop-1';
+  const shopId = user?.shop_id || 'demo-shop-1';
 
-  function refreshData() {
-    setJobs(listJobsByShop(effectiveShopId).sort((a, b) => (a.created_at < b.created_at ? 1 : -1)));
-    const shop = getShop(effectiveShopId);
-    setWallet(shop?.wallet_balance || 0);
+  function refresh() {
+    setJobs(listJobsByShop(shopId).sort((a, b) => (a.created_at < b.created_at ? 1 : -1)));
+    setAlerts(listAlerts().filter((alert) => alert.shop_id === shopId));
   }
 
   useEffect(() => {
-    if (user?.user_role !== 'STRINGER') return;
-    refreshData();
-
-    const onStorage = () => refreshData();
+    if (!user || user.user_role !== 'STRINGER') return;
+    refresh();
+    const onStorage = () => refresh();
     window.addEventListener('storage', onStorage);
-    const timer = window.setInterval(() => refreshData(), 1200);
-
+    const timer = window.setInterval(refresh, 1200);
     return () => {
       window.removeEventListener('storage', onStorage);
       window.clearInterval(timer);
     };
-  }, [effectiveShopId, user]);
+  }, [user, shopId]);
 
   const filtered = useMemo(() => jobs.filter((job) => job.status === activeTab), [jobs, activeTab]);
-  const pendingPayout = useMemo(() => getPendingPayoutTotal(effectiveShopId), [jobs, effectiveShopId]);
+  const wallet = Number(getShop(shopId)?.wallet_balance || 0);
+  const pendingPayout = useMemo(() => getPendingPayoutTotal(shopId), [jobs, shopId]);
+  const stats = useMemo(() => ({
+    requested: jobs.filter((job) => job.status === 'REQUESTED').length,
+    received: jobs.filter((job) => job.status === 'RECEIVED').length,
+    inProgress: jobs.filter((job) => job.status === 'IN_PROGRESS').length,
+    ready: jobs.filter((job) => job.status === 'FINISHED').length,
+  }), [jobs]);
 
-  async function saveInspection() {
-    if (!selectedJob) return;
-    setUploading(true);
-    const damage = !(frame && grommets && grip);
-    updateJob(selectedJob.job_id, {
-      inspection_log: {
-        frame,
-        grommets,
-        grip,
-        photo_url: file ? file.name : '',
-      },
-      status: damage ? 'IN_PROGRESS' : 'FINISHED',
-      damage_confirmed: !damage,
-    });
-    if (damage) {
-      addAlert({ type: 'damage', job_id: selectedJob.job_id, created_at: new Date().toISOString() });
-      setMessage(`Inspection saved for job ${formatJobCode(selectedJob.job_id)}. Damage flagged, job kept in progress.`);
-      setActiveTab('IN_PROGRESS');
-    } else {
-      setMessage(`Inspection passed for job ${formatJobCode(selectedJob.job_id)}. Job is finished and now waiting for player payment.`);
-      setActiveTab('FINISHED');
-    }
-    setUploading(false);
-    setSelectedJob(null);
-    setFile(null);
-    refreshData();
-  }
-
-  async function markInProgress(jobId: string) {
-    updateJob(jobId, { status: 'IN_PROGRESS' });
-    setMessage(`Job ${formatJobCode(jobId)} moved to in progress.`);
-    setActiveTab('IN_PROGRESS');
-    refreshData();
-  }
-
-  async function withdraw() {
-    if (!wallet) {
-      setMessage('No funds available yet. Complete jobs must be paid before withdrawal.');
-      return;
-    }
-    updateShop(effectiveShopId, { wallet_balance: 0 });
-    setMessage(`Withdrawal completed for $${wallet.toFixed(2)}.`);
-    refreshData();
-  }
-
-  function resetDemo() {
-    clearDemoUser();
-    clearDemoData();
+  async function handleLogout() {
+    await logoutUser();
     window.location.href = '/';
   }
 
-  if (loading) return <main className="container"><div className="card">Loading...</div></main>;
-
-  if (!user) {
-    return (
-      <main className="container">
-        <div className="card grid">
-          <h1 className="h2">Stringer portal</h1>
-          <p className="p">Please log in as a stringer to manage the restring queue and withdraw paid earnings.</p>
-          <Link className="btn" href="/auth?next=/stringer">Log in as stringer</Link>
-        </div>
-      </main>
-    );
+  function confirmDropoff(jobId: string) {
+    updateJob(jobId, { status: 'RECEIVED' });
+    markAlertsReadForJob(jobId);
+    setMessage(`Drop-off confirmed for ${formatJobCode(jobId)}.`);
+    setActiveTab('RECEIVED');
+    refresh();
   }
 
-  if (user.user_role !== 'STRINGER') {
-    return (
-      <main className="container">
-        <div className="card grid">
-          <h1 className="h2">Stringer portal only</h1>
-          <p className="p">This area is only for stringers. Your current session is signed in as a player.</p>
-          <div className="row wrap">
-            <Link className="btn" href="/auth?next=/stringer">Switch to stringer</Link>
-            <Link className="btn secondary" href="/player">Go to player portal</Link>
-          </div>
-        </div>
-      </main>
-    );
+  function markInProgress(jobId: string) {
+    updateJob(jobId, { status: 'IN_PROGRESS' });
+    markAlertsReadForJob(jobId);
+    setMessage(`Job ${formatJobCode(jobId)} moved into the active restring queue.`);
+    setActiveTab('IN_PROGRESS');
+    refresh();
   }
+
+  function saveInspection() {
+    if (!selectedJob) return;
+    const damage = !(frame && grommets && grip);
+    updateJob(selectedJob.job_id, {
+      inspection_log: { frame, grommets, grip, photo_url: file ? file.name : '' },
+      status: damage ? 'IN_PROGRESS' : 'FINISHED',
+      damage_confirmed: !damage,
+    });
+    setMessage(damage ? `Damage flagged for ${formatJobCode(selectedJob.job_id)}. The job stays in progress.` : `Inspection passed for ${formatJobCode(selectedJob.job_id)}. Waiting for player payment.`);
+    setSelectedJob(null);
+    setActiveTab(damage ? 'IN_PROGRESS' : 'FINISHED');
+    refresh();
+  }
+
+  function scanDropoff() {
+    const trimmed = scanTag.trim();
+    if (!trimmed) return;
+    const racquet = getRacquetByTag(trimmed) as any;
+    if (!racquet) {
+      setMessage('No racquet with that GlobeTag is linked to a player bag yet. Ask the player to scan it first.');
+      return;
+    }
+    const job = createJob({
+      racquet_id: racquet.racquet_id,
+      owner_uid: racquet.owner_uid,
+      owner_name: racquet.owner_name || 'Player',
+      shop_id: shopId,
+      amount_total: 30,
+      status: 'RECEIVED',
+      request_source: 'STRINGER_SCAN',
+    });
+    addAlert({
+      type: 'stringer_scan',
+      job_id: job.job_id,
+      shop_id: shopId,
+      racquet_id: racquet.racquet_id,
+      tag_id: racquet.tag_id,
+      owner_name: racquet.owner_name || 'Player',
+      created_at: new Date().toISOString(),
+      read: true,
+    });
+    setMessage(`Drop-off scan recorded for ${racquet.tag_id}. The player can now see this job in their portal.`);
+    setActiveTab('RECEIVED');
+    refresh();
+  }
+
+  function withdraw() {
+    if (!wallet) {
+      setMessage('No funds available yet. Paid jobs move into the wallet automatically.');
+      return;
+    }
+    const paidJobs = jobs.filter((job) => job.status === 'PAID' && !job.payout_released);
+    paidJobs.forEach((job) => updateJob(job.job_id, { payout_released: true }));
+    updateShop(shopId, { wallet_balance: 0 });
+    setMessage(`Payout initiated for $${wallet.toFixed(2)}.`);
+    refresh();
+  }
+
+  if (loading) return <main className="container"><div className="card">Loading queue…</div></main>;
+  if (!user) return <main className="container"><div className="card grid"><h1 className="h2">Stringer access</h1><p className="p">Sign in to manage requests, drop-offs, inspections, and payouts.</p><Link className="btn" href="/auth?mode=signin&role=STRINGER">Sign in as stringer</Link></div></main>;
+  if (user.user_role !== 'STRINGER') return <main className="container"><div className="card grid"><h1 className="h2">Stringer portal only</h1><p className="p">This account is set up as a player. Use a stringer account to open the service queue.</p><div className="inline-actions"><Link className="btn small-btn" href="/auth?mode=signin&role=STRINGER">Open stringer sign in</Link><Link className="btn secondary small-btn" href="/player">Go to player portal</Link></div></div></main>;
 
   return (
-    <main className="container grid">
-      <div className="card grid">
-        <span className="kicker">Stringer portal</span>
-        <div className="row between">
-          <div>
-            <h1 className="h2">Queue + inspection</h1>
-            <p className="p">Players drop off racquets first. Once you finish the job, the player pays before pickup. Only paid jobs increase the withdrawable wallet.</p>
+    <main className="container shell premium-shell">
+      <section className="hero hero-premium stringer-hero">
+        <div className="hero-inner premium-hero-inner">
+          <div className="topbar topbar-inline">
+            <div className="brand">
+              <div className="brand-mark">SG</div>
+              <div>
+                <div className="small">Stringer portal</div>
+                <strong>{user.name}</strong>
+              </div>
+            </div>
+            <button className="btn secondary small-btn" onClick={handleLogout}><LogOut size={16} /> Sign out</button>
           </div>
-          <div className="badge green">Wallet ${wallet.toFixed(2)}</div>
-        </div>
-        <div className="card grid">
-          <div className="row between"><span className="small">Withdrawable balance</span><strong>${wallet.toFixed(2)}</strong></div>
-          <div className="row between"><span className="small">Paid jobs ready to withdraw</span><strong>${pendingPayout.toFixed(2)}</strong></div>
-          <div className="row between"><span className="small">Platform fee per job</span><strong>$0.35</strong></div>
-        </div>
-        <div className="row wrap">
-          <button className="btn secondary" onClick={withdraw} disabled={!wallet}>Withdraw</button>
-          <button className="btn ghost" onClick={resetDemo}>Reset demo data</button>
-        </div>
-        {!wallet ? <div className="small">No funds available yet. Complete jobs must be paid before withdrawal.</div> : null}
-        {message ? <div className="notice success">{message}</div> : null}
-      </div>
 
-      <div className="card grid">
-        <div className="tabbar four">
-          {tabs.map((tab) => (
-            <div key={tab} className={`tab ${activeTab === tab ? 'active' : ''}`} onClick={() => setActiveTab(tab)}>{tab.replace('_', ' ')}</div>
-          ))}
+          <div className="hero-copy-stack">
+            <span className="kicker">Daily queue</span>
+            <h1 className="h1">Track drop-offs, inspections, and payouts in one premium queue.</h1>
+            <p className="p lead">Everything from player requests to final payout lives in one cleaner stringer workspace, with step-by-step actions for every job state.</p>
+          </div>
+
+          <div className="hero-summary-grid stringer-summary-grid">
+            <div className="summary-card glass-card"><span className="small">Wallet</span><strong>${wallet.toFixed(2)}</strong><span className="summary-meta">Paid out after pickup checkout clears</span></div>
+            <div className="summary-card glass-card"><span className="small">Ready to withdraw</span><strong>${pendingPayout.toFixed(2)}</strong><span className="summary-meta">Net amount currently available</span></div>
+            <div className="summary-card glass-card"><span className="small">Unread alerts</span><strong>{alerts.filter((a) => !a.read).length}</strong><span className="summary-meta">New activity from players and scans</span></div>
+          </div>
         </div>
-        <div className="list">
+      </section>
+
+      {message ? <div className="notice success">{message}</div> : null}
+
+      <section className="panel-grid stringer-top-grid">
+        <div className="card col-8 grid strong section-card section-card-large">
+          <div className="topbar">
+            <div className="section-heading">
+              <span className="kicker">Queue overview</span>
+              <h2 className="h2">What needs attention today</h2>
+              <p className="p section-subtle">These premium summary cards surface the next work in line before you even open a specific tab.</p>
+            </div>
+          </div>
+          <div className="stats premium-queue-stats">
+            <div className="stat stat-highlight"><span className="small">Requested</span><strong>{stats.requested}</strong><span className="summary-meta">Player jobs waiting for drop-off confirmation</span></div>
+            <div className="stat"><span className="small">Received</span><strong>{stats.received}</strong><span className="summary-meta">Jobs physically at the shop</span></div>
+            <div className="stat"><span className="small">In progress</span><strong>{stats.inProgress}</strong><span className="summary-meta">Racquets on the machine or in inspection</span></div>
+            <div className="stat"><span className="small">Ready for payment</span><strong>{stats.ready}</strong><span className="summary-meta">Waiting on player checkout to release payout</span></div>
+          </div>
+        </div>
+
+        <div className="card col-4 grid strong section-card">
+          <div className="topbar"><div className="section-heading"><span className="kicker">Drop-off scan</span><h2 className="h2">Create a job at the shop</h2></div><ScanLine size={18} /></div>
+          <p className="p">If a player walks in with the racquet, scan the GlobeTag here and the job will appear in both portals instantly.</p>
+          <div>
+            <label className="label">GlobeTag</label>
+            <input className="input" value={scanTag} onChange={(e) => setScanTag(e.target.value)} placeholder="Enter GlobeTag" />
+          </div>
+          <button className="btn" onClick={scanDropoff}>Create job from drop-off scan</button>
+          <button className="btn secondary" onClick={withdraw}><Wallet size={16} /> Withdraw balance</button>
+        </div>
+      </section>
+
+      <section className="panel-grid stringer-top-grid">
+        <div className="card col-7 grid strong section-card">
+          <div className="topbar"><div className="section-heading"><span className="kicker">Notifications</span><h2 className="h2">Player requests and shop activity</h2></div><BellRing size={18} /></div>
+          <div className="list notification-list-premium">
+            {alerts.slice(0, 4).map((alert) => (
+              <div className="meta-item notification-item" key={alert.id}>
+                <strong>{alert.type === 'dropoff_request' ? 'Player requested drop-off' : 'Stringer scan recorded'}</strong>
+                <div>{alert.owner_name || 'Player'} • {alert.tag_id || '—'}</div>
+              </div>
+            ))}
+            {alerts.length === 0 ? <div className="small">No notifications yet. Player requests will appear here.</div> : null}
+          </div>
+        </div>
+
+        <div className="card col-5 grid strong section-card">
+          <div className="section-heading">
+            <span className="kicker">Workflow</span>
+            <h2 className="h2">How the queue moves</h2>
+          </div>
+          <div className="workflow-stack">
+            <div className="workflow-item"><ClipboardList size={18} /><div><strong>Request</strong><span>Player scan or portal request lands in the requested column.</span></div></div>
+            <div className="workflow-item"><ShieldCheck size={18} /><div><strong>Inspect</strong><span>Confirm drop-off, start restring, then record inspection details.</span></div></div>
+            <div className="workflow-item"><CheckCircle2 size={18} /><div><strong>Payout</strong><span>Player payment unlocks the wallet and makes the payout withdrawable.</span></div></div>
+          </div>
+        </div>
+      </section>
+
+      <section className="card grid strong section-card section-card-large">
+        <div className="topbar queue-header-bar">
+          <div className="section-heading">
+            <span className="kicker">Service queue</span>
+            <h2 className="h2">Current jobs</h2>
+          </div>
+          <div className="tabbar premium-tabbar">
+            {tabs.map((tab) => (
+              <button key={tab} type="button" className={`tab ${activeTab === tab ? 'active' : ''}`} onClick={() => setActiveTab(tab)}>{tabLabels[tab]}</button>
+            ))}
+          </div>
+        </div>
+        <div className="list premium-job-list">
           {filtered.map((job) => (
-            <div className="card" key={job.job_id}>
-              <div className="row between">
-                <strong>Job {formatJobCode(job.job_id)}</strong>
+            <div className="card premium-job-card" key={job.job_id}>
+              <div className="row between wrap">
+                <div>
+                  <div className="small">Job {formatJobCode(job.job_id)}</div>
+                  <h3 className="h3">{job.owner_name || 'Player'}</h3>
+                </div>
                 <StatusPill status={job.status} />
               </div>
-              <div className="small">Racquet: {job.racquet_id}</div>
-              <div className="small">Owner: {job.owner_name || 'Demo Player'}</div>
-              <div className="small">{job.status === 'PAID' ? 'Paid by player' : 'Job total'}: ${Number(job.amount_total || 30).toFixed(2)}</div>
-              {job.status === 'FINISHED' ? <div className="small">Waiting for player payment before this amount moves into the wallet.</div> : null}
-              {job.status === 'PAID' ? <div className="notice success">Paid successfully. Net payout is ready to withdraw.</div> : null}
-              <div className="row wrap">
-                {job.status === 'RECEIVED' ? <button className="btn secondary" onClick={() => void markInProgress(job.job_id)}>Start</button> : null}
-                {job.status !== 'FINISHED' && job.status !== 'PAID' ? <button className="btn" onClick={() => setSelectedJob(job)}>Inspect</button> : null}
+              <div className="job-meta-grid">
+                <div className="small">Source: {job.request_source === 'STRINGER_SCAN' ? 'Created by shop drop-off scan' : 'Created from the player side'}</div>
+                <div className="small">{job.status === 'PAID' ? 'Paid by player' : 'Job total'}: ${Number(job.amount_total || 30).toFixed(2)}</div>
+              </div>
+              {job.status === 'REQUESTED' ? <div className="notice">Player requested a job. Confirm drop-off once the racquet arrives at the shop.</div> : null}
+              {job.status === 'RECEIVED' ? <div className="notice">Drop-off confirmed. This racquet is ready to enter the restring queue.</div> : null}
+              {job.status === 'FINISHED' ? <div className="notice warn">Waiting for player payment before payout is released.</div> : null}
+              {job.status === 'PAID' ? <div className="notice success">Paid successfully. Net payout is now {job.payout_released ? 'processing in payout' : 'withdrawable'}.</div> : null}
+              <div className="inline-actions">
+                {job.status === 'REQUESTED' ? <button className="btn small-btn" onClick={() => confirmDropoff(job.job_id)}>Confirm drop-off</button> : null}
+                {job.status === 'RECEIVED' ? <button className="btn small-btn" onClick={() => markInProgress(job.job_id)}>Start restring</button> : null}
+                {job.status !== 'FINISHED' && job.status !== 'PAID' && job.status !== 'REQUESTED' ? <button className="btn secondary small-btn" onClick={() => setSelectedJob(job)}>Inspect racquet</button> : null}
               </div>
             </div>
           ))}
-          {filtered.length === 0 ? <div className="small">No jobs in this column.</div> : null}
+          {filtered.length === 0 ? <div className="small">No jobs in this column yet.</div> : null}
         </div>
-      </div>
+      </section>
 
       {selectedJob ? (
-        <div className="card grid">
-          <h2 className="h2">Inspection for job {formatJobCode(selectedJob.job_id)}</h2>
-          <label className="row"><input type="checkbox" checked={frame} onChange={(e) => setFrame(e.target.checked)} /> Frame OK</label>
-          <label className="row"><input type="checkbox" checked={grommets} onChange={(e) => setGrommets(e.target.checked)} /> Grommets OK</label>
-          <label className="row"><input type="checkbox" checked={grip} onChange={(e) => setGrip(e.target.checked)} /> Grip OK</label>
+        <section className="card grid strong inspection-sheet" style={{ maxWidth: 760 }}>
+          <div className="section-heading"><span className="kicker">Inspection</span><h2 className="h2">Job {formatJobCode(selectedJob.job_id)}</h2><p className="p section-subtle">Log condition checks before you send the racquet to the finished state.</p></div>
+          <div className="inspection-checks">
+            <label className="check-row"><input type="checkbox" checked={frame} onChange={(e) => setFrame(e.target.checked)} /> <span>Frame is in good condition</span></label>
+            <label className="check-row"><input type="checkbox" checked={grommets} onChange={(e) => setGrommets(e.target.checked)} /> <span>Grommets are in good condition</span></label>
+            <label className="check-row"><input type="checkbox" checked={grip} onChange={(e) => setGrip(e.target.checked)} /> <span>Grip is in good condition</span></label>
+          </div>
           <input className="input" type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-          <button className="btn" onClick={() => void saveInspection()} disabled={uploading}>{uploading ? 'Saving...' : 'Save inspection'}</button>
-          <p className="small">If any damage is flagged, the job stays in progress and an alert is logged in demo storage.</p>
-        </div>
+          <div className="inline-actions">
+            <button className="btn small-btn" onClick={saveInspection}>Save inspection</button>
+            <button className="btn secondary small-btn" onClick={() => setSelectedJob(null)}>Cancel</button>
+          </div>
+        </section>
       ) : null}
     </main>
   );

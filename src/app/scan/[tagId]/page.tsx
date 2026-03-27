@@ -1,226 +1,168 @@
 'use client';
 
-import { db } from '@/lib/firebase';
-import { getDemoUser } from '@/lib/demoAuth';
+import { useCurrentUser } from '@/components/RoleGate';
 import {
+  addAlert,
   createJob,
   createRacquet,
   ensureDemoShop,
-  formatJobCode,
   getRacquetByTagOwner,
   saveRacquet,
 } from '@/lib/demoData';
-import { addDoc, collection, doc, getDocs, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import { getRacquetHealth } from '@/lib/health';
+import { ArrowRight, CheckCircle2, ScanLine, Sparkles } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
-
-const PENDING_SCAN_KEY = 'stringglobe_pending_scan';
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
 
 export default function ScanTagPage({ params }: { params: Promise<{ tagId: string }> }) {
   const router = useRouter();
+  const { user, loading } = useCurrentUser();
   const [tagId, setTagId] = useState('');
-  const [name, setName] = useState('');
-  const [stringType, setStringType] = useState('Poly');
+  const [stringType, setStringType] = useState('Poly Tour Pro');
   const [tension, setTension] = useState('52 lbs');
   const [racquet, setRacquet] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
-  const autoSubmittedRef = useRef(false);
-  const demoUser = getDemoUser();
-  const currentUid = demoUser?.uid;
+  const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState('');
 
   useEffect(() => {
     params.then(({ tagId }) => setTagId(tagId));
   }, [params]);
 
   useEffect(() => {
-    if (!tagId || !currentUid) return;
-    const existing = getRacquetByTagOwner(tagId, currentUid);
+    if (!tagId || !user || user.user_role !== 'PLAYER') return;
+    const existing = getRacquetByTagOwner(tagId, user.uid);
+    setRacquet(existing);
     if (existing) {
-      setRacquet(existing);
-      return;
+      setStringType(existing.string_type || 'Poly Tour Pro');
+      setTension(existing.tension || '52 lbs');
     }
-    const load = async () => {
-      try {
-        const q = query(collection(db, 'racquets'), where('tag_id', '==', tagId), where('owner_uid', '==', currentUid));
-        const snap = await getDocs(q);
-        if (!snap.empty) setRacquet({ racquet_id: snap.docs[0].id, ...snap.docs[0].data() });
-      } catch (error) {
-        console.warn('Firestore racquet lookup skipped in demo mode:', error);
-      }
-    };
-    void load();
-  }, [tagId, currentUid]);
+  }, [tagId, user]);
 
-  useEffect(() => {
-    if (!tagId || !currentUid || loading || autoSubmittedRef.current) return;
-    const raw = window.sessionStorage.getItem(PENDING_SCAN_KEY);
-    if (!raw) return;
-
+  async function handlePrimaryAction() {
+    if (!user || user.user_role !== 'PLAYER') return;
+    setSubmitting(true);
     try {
-      const pending = JSON.parse(raw);
-      if (pending.tagId !== tagId) return;
+      ensureDemoShop({ shop_id: 'demo-shop-1', name: 'Central Court Tennis Lab', labor_rate: 30, owner_uid: 'shop-owner', wallet_balance: 0 });
 
-      setName(pending.name || '');
-      setStringType(pending.stringType || 'Poly');
-      setTension(pending.tension || '52 lbs');
-      autoSubmittedRef.current = true;
-      window.sessionStorage.removeItem(PENDING_SCAN_KEY);
-
-      void handleCreateOrRequest({
-        skipAuthRedirect: true,
-        overrideName: pending.name,
-        overrideStringType: pending.stringType,
-        overrideTension: pending.tension,
-      });
-    } catch (error) {
-      console.error('Failed to resume pending scan:', error);
-      window.sessionStorage.removeItem(PENDING_SCAN_KEY);
-    }
-  }, [tagId, currentUid, loading]);
-
-  async function mirrorToFirestore(localRacquet: any, localJob: any) {
-    try {
-      await setDoc(
-        doc(db, 'racquets', localRacquet.racquet_id),
-        { ...localRacquet, created_at_server: serverTimestamp() },
-        { merge: true }
-      );
-      await setDoc(
-        doc(db, 'shops', 'demo-shop-1'),
-        {
-          shop_id: 'demo-shop-1',
-          name: 'Demo Tennis Lab',
-          labor_rate: 30,
-          owner_uid: 'demo-stringer',
-          wallet_balance: 0,
-        },
-        { merge: true }
-      );
-      await setDoc(
-        doc(db, 'jobs', localJob.job_id),
-        { ...localJob, created_at_server: serverTimestamp() },
-        { merge: true }
-      );
-    } catch (error) {
-      console.warn('Firestore mirror skipped:', error);
-    }
-  }
-
-  async function handleCreateOrRequest(options?: {
-    skipAuthRedirect?: boolean;
-    overrideName?: string;
-    overrideStringType?: string;
-    overrideTension?: string;
-  }) {
-    const nextName = options?.overrideName ?? name;
-    const nextStringType = options?.overrideStringType ?? stringType;
-    const nextTension = options?.overrideTension ?? tension;
-
-    if (!currentUid) {
-      window.sessionStorage.setItem(
-        PENDING_SCAN_KEY,
-        JSON.stringify({
-          tagId,
-          name: nextName,
-          stringType: nextStringType,
-          tension: nextTension,
-        })
-      );
-      if (!options?.skipAuthRedirect) {
-        router.push(`/auth?next=${encodeURIComponent(`/scan/${tagId}`)}`);
-      }
-      return;
-    }
-
-    setLoading(true);
-    try {
-      let nextRacquet = racquet;
-      if (!nextRacquet?.racquet_id) {
-        nextRacquet = createRacquet({
-          owner_uid: currentUid,
-          owner_name: nextName || 'Demo Player',
+      if (!racquet?.racquet_id) {
+        createRacquet({
+          owner_uid: user.uid,
+          owner_name: user.name,
           tag_id: tagId,
-          string_type: nextStringType,
-          tension: nextTension,
+          string_type: stringType,
+          tension,
         });
-      } else {
-        nextRacquet = saveRacquet({
-          ...nextRacquet,
-          owner_uid: currentUid,
-          owner_name: nextName || nextRacquet.owner_name || 'Demo Player',
-          tag_id: tagId,
-          string_type: nextStringType,
-          tension: nextTension,
-        });
+        router.replace('/player?added=1');
+        return;
       }
-      setRacquet(nextRacquet);
 
-      ensureDemoShop({
-        shop_id: 'demo-shop-1',
-        name: 'Demo Tennis Lab',
-        labor_rate: 30,
-        owner_uid: 'demo-stringer',
-        wallet_balance: 0,
+      saveRacquet({
+        ...racquet,
+        owner_uid: user.uid,
+        owner_name: user.name,
+        tag_id: tagId,
+        string_type: stringType,
+        tension,
       });
 
-      const localJob = createJob({
-        racquet_id: nextRacquet.racquet_id,
-        owner_uid: currentUid,
-        owner_name: nextName || 'Demo Player',
+      const job = createJob({
+        racquet_id: racquet.racquet_id,
+        owner_uid: user.uid,
+        owner_name: user.name,
         shop_id: 'demo-shop-1',
         amount_total: 30,
+        status: 'REQUESTED',
+        request_source: 'PLAYER_SCAN',
       });
-
-      void mirrorToFirestore(nextRacquet, localJob);
-      router.replace('/player');
-      router.refresh();
-    } catch (error) {
-      console.error('Failed to create restring request:', error);
-      alert('Could not create restring request. Check console for details.');
-      setLoading(false);
+      addAlert({
+        type: 'dropoff_request',
+        shop_id: 'demo-shop-1',
+        job_id: job.job_id,
+        racquet_id: racquet.racquet_id,
+        tag_id: racquet.tag_id,
+        owner_name: user.name,
+        created_at: new Date().toISOString(),
+        read: false,
+      });
+      router.replace('/player?requested=1');
+    } catch (err) {
+      console.error(err);
+      setMessage('We could not process this tag right now.');
+    } finally {
+      setSubmitting(false);
     }
   }
+
+  if (loading) return <main className="container"><div className="card">Loading scan…</div></main>;
+  if (!user) return <main className="container"><div className="card grid"><h1 className="h2">Player sign-in required</h1><p className="p">Sign in before scanning a GlobeTag so we can add the racquet to your bag.</p><Link className="btn" href={`/auth?mode=signin&role=PLAYER&next=${encodeURIComponent(`/scan/${tagId}`)}`}>Sign in to continue</Link></div></main>;
+  if (user.user_role !== 'PLAYER') return <main className="container"><div className="card grid"><h1 className="h2">Player scan only</h1><p className="p">This scan flow is available for player accounts. Use a player login to manage racquets in a bag.</p><Link className="btn" href="/auth?mode=signin&role=PLAYER">Open player sign in</Link></div></main>;
 
   const health = getRacquetHealth(racquet?.last_string_date);
 
   return (
-    <main className="container">
-      <div className="card grid">
-        <span className="kicker">GlobeTag scan</span>
-        <h1 className="h2">Tag ID: {tagId}</h1>
+    <main className="container shell premium-shell">
+      <section className="card grid strong section-card scan-result-card" style={{ maxWidth: 840 }}>
+        <div className="scan-result-top">
+          <div className="scan-result-badge"><ScanLine size={18} /></div>
+          <div className="section-heading">
+            <span className="kicker">GlobeTag detected</span>
+            <h1 className="h2">Tag ID: {tagId}</h1>
+            <p className="p">This final confirmation step decides whether the tag becomes a brand-new racquet card or an instant service request.</p>
+          </div>
+        </div>
+        {message ? <div className="notice warn">{message}</div> : null}
+
         {!racquet ? (
           <>
-            <p className="p">First-time scan. Add player and racquet setup, then create the restring request.</p>
-            <div>
-              <label className="label">Name</label>
-              <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
+            <div className="scan-preview-grid">
+              <div className="scan-preview-panel">
+                <span className="scan-preview-icon"><Sparkles size={18} /></span>
+                <h3 className="h3">New racquet</h3>
+                <p className="p">This GlobeTag has not been linked to your bag yet. Save the setup below to create the card instantly.</p>
+              </div>
+              <div className="scan-preview-panel scan-preview-panel-soft">
+                <span className="scan-preview-icon"><CheckCircle2 size={18} /></span>
+                <h3 className="h3">What gets saved</h3>
+                <p className="p">String type, tension, and the shared GlobeTag record so the stringer can recognize the racquet later.</p>
+              </div>
             </div>
-            <div>
-              <label className="label">String type</label>
-              <input className="input" value={stringType} onChange={(e) => setStringType(e.target.value)} />
+            <div className="meta-grid">
+              <div>
+                <label className="label">String type</label>
+                <input className="input" value={stringType} onChange={(e) => setStringType(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Tension</label>
+                <input className="input" value={tension} onChange={(e) => setTension(e.target.value)} />
+              </div>
             </div>
-            <div>
-              <label className="label">Tension</label>
-              <input className="input" value={tension} onChange={(e) => setTension(e.target.value)} />
+            <div className="inline-actions">
+              <button className="btn small-btn" onClick={() => void handlePrimaryAction()} disabled={submitting}>{submitting ? 'Adding to bag…' : 'Add racquet to bag'}</button>
+              <Link className="btn secondary small-btn" href="/player">Back to player portal</Link>
             </div>
-            <button className="btn" onClick={() => void handleCreateOrRequest()} disabled={loading}>{loading ? 'Creating...' : 'Confirm and request restring'}</button>
           </>
         ) : (
           <>
-            <div className="row between">
+            <div className="row between wrap">
               <div>
-                <div className="small">Racquet health</div>
-                <div className={`badge ${health.tone}`}>{health.label}</div>
+                <div className="small">Racquet already in your bag</div>
+                <h3 className="h3">{racquet.tag_id}</h3>
               </div>
-              <div className="small">Restrung {racquet.restring_count || 0} times</div>
+              <div className={`badge ${health.tone}`}>{health.statusLabel}</div>
             </div>
-            <div className="small">String: {racquet.string_type} · Tension: {racquet.tension}</div>
-            <div className="notice">Ready to create a new restring job for this racquet.</div>
-            <button className="btn" onClick={() => void handleCreateOrRequest()} disabled={loading}>{loading ? 'Submitting...' : 'Request restring'}</button>
+            <div className="meta-grid">
+              <div className="meta-item"><strong>String type</strong>{racquet.string_type}</div>
+              <div className="meta-item"><strong>Tension</strong>{racquet.tension}</div>
+            </div>
+            <div className="notice">Scanning an existing racquet creates a string job request and instantly notifies the pro shop stringer about the upcoming drop-off.</div>
+            <div className="inline-actions">
+              <button className="btn small-btn" onClick={() => void handlePrimaryAction()} disabled={submitting}>{submitting ? 'Sending request…' : 'Request string job'} <ArrowRight size={16} /></button>
+              <Link className="btn secondary small-btn" href="/player">Back to player portal</Link>
+            </div>
           </>
         )}
-      </div>
+      </section>
     </main>
   );
 }
