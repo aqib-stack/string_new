@@ -1,5 +1,3 @@
-'use client';
-
 import { db } from './firebase';
 import {
   DEFAULT_LABOR_RATE,
@@ -182,10 +180,13 @@ export async function listRacquetsByOwner(ownerUid: string): Promise<RacquetReco
     query(collection(db, 'racquets'), where('owner_uid', '==', ownerUid))
   );
 
-  const items: RacquetRecord[] = snap.docs.map((d) => ({
-    id: d.id,
-    ...(d.data() as Omit<RacquetRecord, 'id'>),
-  }));
+  const items: RacquetRecord[] = snap.docs.map(
+    (d) =>
+      ({
+        id: d.id,
+        ...(d.data() as Omit<RacquetRecord, 'id'>),
+      }) as RacquetRecord
+  );
 
   return sortByNewest(items);
 }
@@ -195,11 +196,12 @@ export async function listJobsByOwner(ownerUid: string): Promise<JobRecord[]> {
     query(collection(db, 'jobs'), where('owner_uid', '==', ownerUid))
   );
 
-  const items: JobRecord[] = snap.docs.map((d) =>
-    normalizeJob({
-      id: d.id,
-      ...(d.data() as Omit<JobRecord, 'id'>),
-    })
+  const items: JobRecord[] = snap.docs.map(
+    (d) =>
+      normalizeJob({
+        id: d.id,
+        ...(d.data() as Omit<JobRecord, 'id'>),
+      }) as JobRecord
   );
 
   return sortByNewest(items);
@@ -210,11 +212,12 @@ export async function listJobsByShop(shopId: string): Promise<JobRecord[]> {
     query(collection(db, 'jobs'), where('shop_id', '==', shopId))
   );
 
-  const items: JobRecord[] = snap.docs.map((d) =>
-    normalizeJob({
-      id: d.id,
-      ...(d.data() as Omit<JobRecord, 'id'>),
-    })
+  const items: JobRecord[] = snap.docs.map(
+    (d) =>
+      normalizeJob({
+        id: d.id,
+        ...(d.data() as Omit<JobRecord, 'id'>),
+      }) as JobRecord
   );
 
   return sortByNewest(items);
@@ -227,11 +230,12 @@ export async function listAlerts(shopId?: string): Promise<AlertRecord[]> {
 
   const snap = await getDocs(qRef);
 
-  const items: AlertRecord[] = snap.docs.map((d) =>
-    normalizeAlert({
-      id: d.id,
-      ...(d.data() as Omit<AlertRecord, 'id'>),
-    })
+  const items: AlertRecord[] = snap.docs.map(
+    (d) =>
+      normalizeAlert({
+        id: d.id,
+        ...(d.data() as Omit<AlertRecord, 'id'>),
+      }) as AlertRecord
   );
 
   return sortByNewest(items);
@@ -290,11 +294,12 @@ export async function getLatestJobForRacquet(racquetId: string): Promise<JobReco
     query(collection(db, 'jobs'), where('racquet_id', '==', racquetId))
   );
 
-  const jobs: JobRecord[] = snap.docs.map((d) =>
-    normalizeJob({
-      id: d.id,
-      ...(d.data() as Omit<JobRecord, 'id'>),
-    })
+  const jobs: JobRecord[] = snap.docs.map(
+    (d) =>
+      normalizeJob({
+        id: d.id,
+        ...(d.data() as Omit<JobRecord, 'id'>),
+      }) as JobRecord
   );
 
   const sorted = sortByNewest(jobs);
