@@ -135,18 +135,18 @@ function toMillis(value: TimestampLike): number {
   return 0;
 }
 
-function sortByNewest<T extends { created_at?: TimestampLike; created_at_server?: TimestampLike; updated_at_server?: TimestampLike }>(
-  items: T[]
-): T[] {
+function sortByNewest<T extends AnyRecord>(items: T[]): T[] {
   return [...items].sort((a, b) => {
     const aTime =
-      toMillis(a.created_at) ||
-      toMillis(a.created_at_server) ||
-      toMillis(a.updated_at_server);
+      toMillis(a.created_at as TimestampLike) ||
+      toMillis(a.created_at_server as TimestampLike) ||
+      toMillis(a.updated_at_server as TimestampLike);
+
     const bTime =
-      toMillis(b.created_at) ||
-      toMillis(b.created_at_server) ||
-      toMillis(b.updated_at_server);
+      toMillis(b.created_at as TimestampLike) ||
+      toMillis(b.created_at_server as TimestampLike) ||
+      toMillis(b.updated_at_server as TimestampLike);
+
     return bTime - aTime;
   });
 }
@@ -182,12 +182,12 @@ export async function listRacquetsByOwner(ownerUid: string): Promise<RacquetReco
     query(collection(db, 'racquets'), where('owner_uid', '==', ownerUid))
   );
 
-  return sortByNewest(
-    snap.docs.map((d) => ({
-      id: d.id,
-      ...(d.data() as Omit<RacquetRecord, 'id'>),
-    }))
-  );
+  const items: RacquetRecord[] = snap.docs.map((d) => ({
+    id: d.id,
+    ...(d.data() as Omit<RacquetRecord, 'id'>),
+  }));
+
+  return sortByNewest(items);
 }
 
 export async function listJobsByOwner(ownerUid: string): Promise<JobRecord[]> {
@@ -195,14 +195,14 @@ export async function listJobsByOwner(ownerUid: string): Promise<JobRecord[]> {
     query(collection(db, 'jobs'), where('owner_uid', '==', ownerUid))
   );
 
-  return sortByNewest(
-    snap.docs.map((d) =>
-      normalizeJob({
-        id: d.id,
-        ...(d.data() as Omit<JobRecord, 'id'>),
-      })
-    )
+  const items: JobRecord[] = snap.docs.map((d) =>
+    normalizeJob({
+      id: d.id,
+      ...(d.data() as Omit<JobRecord, 'id'>),
+    })
   );
+
+  return sortByNewest(items);
 }
 
 export async function listJobsByShop(shopId: string): Promise<JobRecord[]> {
@@ -210,14 +210,14 @@ export async function listJobsByShop(shopId: string): Promise<JobRecord[]> {
     query(collection(db, 'jobs'), where('shop_id', '==', shopId))
   );
 
-  return sortByNewest(
-    snap.docs.map((d) =>
-      normalizeJob({
-        id: d.id,
-        ...(d.data() as Omit<JobRecord, 'id'>),
-      })
-    )
+  const items: JobRecord[] = snap.docs.map((d) =>
+    normalizeJob({
+      id: d.id,
+      ...(d.data() as Omit<JobRecord, 'id'>),
+    })
   );
+
+  return sortByNewest(items);
 }
 
 export async function listAlerts(shopId?: string): Promise<AlertRecord[]> {
@@ -227,14 +227,14 @@ export async function listAlerts(shopId?: string): Promise<AlertRecord[]> {
 
   const snap = await getDocs(qRef);
 
-  return sortByNewest(
-    snap.docs.map((d) =>
-      normalizeAlert({
-        id: d.id,
-        ...(d.data() as Omit<AlertRecord, 'id'>),
-      })
-    )
+  const items: AlertRecord[] = snap.docs.map((d) =>
+    normalizeAlert({
+      id: d.id,
+      ...(d.data() as Omit<AlertRecord, 'id'>),
+    })
   );
+
+  return sortByNewest(items);
 }
 
 export async function getJob(jobId: string): Promise<JobRecord | null> {
@@ -290,16 +290,16 @@ export async function getLatestJobForRacquet(racquetId: string): Promise<JobReco
     query(collection(db, 'jobs'), where('racquet_id', '==', racquetId))
   );
 
-  const jobs = sortByNewest(
-    snap.docs.map((d) =>
-      normalizeJob({
-        id: d.id,
-        ...(d.data() as Omit<JobRecord, 'id'>),
-      })
-    )
+  const jobs: JobRecord[] = snap.docs.map((d) =>
+    normalizeJob({
+      id: d.id,
+      ...(d.data() as Omit<JobRecord, 'id'>),
+    })
   );
 
-  return jobs[0] || null;
+  const sorted = sortByNewest(jobs);
+
+  return sorted[0] || null;
 }
 
 export async function getOpenJobForRacquet(racquetId: string): Promise<JobRecord | null> {
