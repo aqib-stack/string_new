@@ -17,7 +17,90 @@ import {
   setDoc,
   updateDoc,
   where,
+  type FieldValue,
 } from 'firebase/firestore';
+
+type TimestampLike =
+  | string
+  | Date
+  | { seconds: number; nanoseconds?: number }
+  | { toMillis: () => number }
+  | FieldValue
+  | null
+  | undefined;
+
+export type JobStatus =
+  | 'REQUESTED'
+  | 'RECEIVED'
+  | 'IN_PROGRESS'
+  | 'FINISHED'
+  | 'PAID'
+  | 'PICKED_UP';
+
+export interface RacquetRecord {
+  id?: string;
+  racquet_id: string;
+  owner_uid: string;
+  owner_name: string;
+  tag_id: string;
+  restring_count: number;
+  last_string_date: string;
+  string_type: string;
+  tension: string;
+  created_at?: string;
+  created_at_server?: TimestampLike;
+  updated_at?: string;
+  updated_at_server?: TimestampLike;
+  [key: string]: any;
+}
+
+export interface JobRecord {
+  id?: string;
+  job_id: string;
+  racquet_id: string;
+  shop_id: string;
+  status: JobStatus;
+  owner_uid: string;
+  owner_name: string;
+  amount_total: number;
+  created_at?: string;
+  created_at_server?: TimestampLike;
+  updated_at?: string;
+  updated_at_server?: TimestampLike;
+  payment_intent_id?: string;
+  damage_confirmed?: boolean;
+  request_source?: string;
+  payout_released?: boolean;
+  inspection_saved_at?: string;
+  [key: string]: any;
+}
+
+export interface AlertRecord {
+  id: string;
+  read: boolean;
+  created_at?: string;
+  created_at_server?: TimestampLike;
+  read_at?: string;
+  job_id?: string;
+  shop_id?: string;
+  owner_name?: string;
+  racquet_id?: string;
+  tag_id?: string;
+  type?: string;
+  [key: string]: any;
+}
+
+export interface ShopRecord {
+  id?: string;
+  shop_id: string;
+  name: string;
+  labor_rate: number;
+  owner_uid: string;
+  wallet_balance: number;
+  created_at_server?: TimestampLike;
+  updated_at_server?: TimestampLike;
+  [key: string]: any;
+}
 
 type AnyRecord = Record<string, any>;
 
@@ -29,7 +112,7 @@ function uid(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function toMillis(value: any): number {
+function toMillis(value: TimestampLike): number {
   if (!value) return 0;
 
   if (typeof value === 'string') {
@@ -37,30 +120,38 @@ function toMillis(value: any): number {
     return Number.isNaN(t) ? 0 : t;
   }
 
-  if (typeof value?.toMillis === 'function') {
-    return value.toMillis();
-  }
-
-  if (value instanceof Date) {
+  if (typeof value === 'object' && value instanceof Date) {
     return value.getTime();
   }
 
-  if (typeof value?.seconds === 'number') {
+  if (typeof value === 'object' && 'toMillis' in value && typeof value.toMillis === 'function') {
+    return value.toMillis();
+  }
+
+  if (typeof value === 'object' && 'seconds' in value && typeof value.seconds === 'number') {
     return value.seconds * 1000;
   }
 
   return 0;
 }
 
-function sortByNewest<T extends AnyRecord>(items: T[]) {
+function sortByNewest<T extends { created_at?: TimestampLike; created_at_server?: TimestampLike; updated_at_server?: TimestampLike }>(
+  items: T[]
+): T[] {
   return [...items].sort((a, b) => {
-    const aTime = toMillis(a.created_at) || toMillis(a.created_at_server) || toMillis(a.updated_at_server);
-    const bTime = toMillis(b.created_at) || toMillis(b.created_at_server) || toMillis(b.updated_at_server);
+    const aTime =
+      toMillis(a.created_at) ||
+      toMillis(a.created_at_server) ||
+      toMillis(a.updated_at_server);
+    const bTime =
+      toMillis(b.created_at) ||
+      toMillis(b.created_at_server) ||
+      toMillis(b.updated_at_server);
     return bTime - aTime;
   });
 }
 
-function normalizeStatus(status?: string) {
+function normalizeStatus(status?: string): JobStatus {
   const value = String(status || 'REQUESTED').toUpperCase();
 
   if (value === 'INPROGRESS') return 'IN_PROGRESS';
@@ -68,24 +159,25 @@ function normalizeStatus(status?: string) {
   if (value === 'INSPECTION_SAVED') return 'FINISHED';
   if (value === 'COMPLETED') return 'FINISHED';
 
-  return value;
+  return value as JobStatus;
 }
 
-function normalizeJob(job: AnyRecord) {
+function normalizeJob(job: AnyRecord): JobRecord {
   return {
     ...job,
     status: normalizeStatus(job.status),
-  };
+  } as JobRecord;
 }
 
-function normalizeAlert(alert: AnyRecord) {
+function normalizeAlert(alert: AnyRecord): AlertRecord {
   return {
     ...alert,
+    id: alert.id,
     read: Boolean(alert.read),
-  };
+  } as AlertRecord;
 }
 
-export async function listRacquetsByOwner(ownerUid: string) {
+export async function listRacquetsByOwner(ownerUid: string): Promise<RacquetRecord[]> {
   const snap = await getDocs(
     query(collection(db, 'racquets'), where('owner_uid', '==', ownerUid))
   );
@@ -93,12 +185,12 @@ export async function listRacquetsByOwner(ownerUid: string) {
   return sortByNewest(
     snap.docs.map((d) => ({
       id: d.id,
-      ...d.data(),
+      ...(d.data() as Omit<RacquetRecord, 'id'>),
     }))
   );
 }
 
-export async function listJobsByOwner(ownerUid: string) {
+export async function listJobsByOwner(ownerUid: string): Promise<JobRecord[]> {
   const snap = await getDocs(
     query(collection(db, 'jobs'), where('owner_uid', '==', ownerUid))
   );
@@ -107,13 +199,13 @@ export async function listJobsByOwner(ownerUid: string) {
     snap.docs.map((d) =>
       normalizeJob({
         id: d.id,
-        ...d.data(),
+        ...(d.data() as Omit<JobRecord, 'id'>),
       })
     )
   );
 }
 
-export async function listJobsByShop(shopId: string) {
+export async function listJobsByShop(shopId: string): Promise<JobRecord[]> {
   const snap = await getDocs(
     query(collection(db, 'jobs'), where('shop_id', '==', shopId))
   );
@@ -122,20 +214,16 @@ export async function listJobsByShop(shopId: string) {
     snap.docs.map((d) =>
       normalizeJob({
         id: d.id,
-        ...d.data(),
+        ...(d.data() as Omit<JobRecord, 'id'>),
       })
     )
   );
 }
 
-export async function listAlerts(shopId?: string) {
-  let qRef;
-
-  if (shopId) {
-    qRef = query(collection(db, 'alerts'), where('shop_id', '==', shopId));
-  } else {
-    qRef = query(collection(db, 'alerts'));
-  }
+export async function listAlerts(shopId?: string): Promise<AlertRecord[]> {
+  const qRef = shopId
+    ? query(collection(db, 'alerts'), where('shop_id', '==', shopId))
+    : query(collection(db, 'alerts'));
 
   const snap = await getDocs(qRef);
 
@@ -143,30 +231,43 @@ export async function listAlerts(shopId?: string) {
     snap.docs.map((d) =>
       normalizeAlert({
         id: d.id,
-        ...d.data(),
+        ...(d.data() as Omit<AlertRecord, 'id'>),
       })
     )
   );
 }
 
-export async function getJob(jobId: string) {
+export async function getJob(jobId: string): Promise<JobRecord | null> {
   const snap = await getDoc(doc(db, 'jobs', jobId));
-  return snap.exists() ? normalizeJob({ id: snap.id, ...snap.data() }) : null;
+  return snap.exists()
+    ? normalizeJob({ id: snap.id, ...(snap.data() as Omit<JobRecord, 'id'>) })
+    : null;
 }
 
-export async function getRacquetById(racquetId: string) {
+export async function getRacquetById(racquetId: string): Promise<RacquetRecord | null> {
   const snap = await getDoc(doc(db, 'racquets', racquetId));
-  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+  return snap.exists()
+    ? ({ id: snap.id, ...(snap.data() as Omit<RacquetRecord, 'id'>) } as RacquetRecord)
+    : null;
 }
 
-export async function getRacquetByTag(tagId: string) {
+export async function getRacquetByTag(tagId: string): Promise<RacquetRecord | null> {
   const snap = await getDocs(
     query(collection(db, 'racquets'), where('tag_id', '==', tagId), limit(1))
   );
-  return snap.docs[0] ? { id: snap.docs[0].id, ...snap.docs[0].data() } : null;
+
+  return snap.docs[0]
+    ? ({
+        id: snap.docs[0].id,
+        ...(snap.docs[0].data() as Omit<RacquetRecord, 'id'>),
+      } as RacquetRecord)
+    : null;
 }
 
-export async function getRacquetByTagOwner(tagId: string, ownerUid: string) {
+export async function getRacquetByTagOwner(
+  tagId: string,
+  ownerUid: string
+): Promise<RacquetRecord | null> {
   const snap = await getDocs(
     query(
       collection(db, 'racquets'),
@@ -176,10 +277,15 @@ export async function getRacquetByTagOwner(tagId: string, ownerUid: string) {
     )
   );
 
-  return snap.docs[0] ? { id: snap.docs[0].id, ...snap.docs[0].data() } : null;
+  return snap.docs[0]
+    ? ({
+        id: snap.docs[0].id,
+        ...(snap.docs[0].data() as Omit<RacquetRecord, 'id'>),
+      } as RacquetRecord)
+    : null;
 }
 
-export async function getLatestJobForRacquet(racquetId: string) {
+export async function getLatestJobForRacquet(racquetId: string): Promise<JobRecord | null> {
   const snap = await getDocs(
     query(collection(db, 'jobs'), where('racquet_id', '==', racquetId))
   );
@@ -188,7 +294,7 @@ export async function getLatestJobForRacquet(racquetId: string) {
     snap.docs.map((d) =>
       normalizeJob({
         id: d.id,
-        ...d.data(),
+        ...(d.data() as Omit<JobRecord, 'id'>),
       })
     )
   );
@@ -196,39 +302,40 @@ export async function getLatestJobForRacquet(racquetId: string) {
   return jobs[0] || null;
 }
 
-export async function getOpenJobForRacquet(racquetId: string) {
+export async function getOpenJobForRacquet(racquetId: string): Promise<JobRecord | null> {
   const latest = await getLatestJobForRacquet(racquetId);
   if (!latest) return null;
 
-  const closedStatuses = ['PAID', 'PICKED_UP'];
+  const closedStatuses: JobStatus[] = ['PAID', 'PICKED_UP'];
   return closedStatuses.includes(normalizeStatus(latest.status)) ? null : latest;
 }
 
-export async function createRacquet(payload: AnyRecord) {
+export async function createRacquet(payload: Partial<RacquetRecord>): Promise<RacquetRecord> {
   const racquet_id = payload.racquet_id || uid('racquet');
 
-  const docData = {
+  const docData: RacquetRecord = {
     racquet_id,
-    owner_uid: payload.owner_uid,
+    owner_uid: payload.owner_uid || '',
     owner_name: payload.owner_name || 'Player',
-    tag_id: payload.tag_id,
+    tag_id: payload.tag_id || '',
     restring_count: payload.restring_count || 0,
     last_string_date: payload.last_string_date || '',
     string_type: payload.string_type || 'Poly Tour Pro',
     tension: payload.tension || '52 lbs',
     created_at: payload.created_at || new Date().toISOString(),
     created_at_server: serverTimestamp(),
-  };
+    ...payload,
+  } as RacquetRecord;
 
   await setDoc(doc(db, 'racquets', racquet_id), docData, { merge: true });
   return docData;
 }
 
-export async function saveRacquet(payload: AnyRecord) {
+export async function saveRacquet(payload: Partial<RacquetRecord>) {
   return createRacquet(payload);
 }
 
-export async function updateRacquet(racquetId: string, data: AnyRecord) {
+export async function updateRacquet(racquetId: string, data: Partial<RacquetRecord>) {
   await setDoc(
     doc(db, 'racquets', racquetId),
     {
@@ -240,15 +347,15 @@ export async function updateRacquet(racquetId: string, data: AnyRecord) {
   );
 }
 
-export async function createJob(payload: AnyRecord) {
+export async function createJob(payload: Partial<JobRecord>): Promise<JobRecord> {
   const job_id = payload.job_id || uid('job');
 
-  const docData = {
+  const docData: JobRecord = {
     job_id,
-    racquet_id: payload.racquet_id,
+    racquet_id: payload.racquet_id || '',
     shop_id: payload.shop_id || SHARED_SHOP_ID,
     status: normalizeStatus(payload.status || 'REQUESTED'),
-    owner_uid: payload.owner_uid,
+    owner_uid: payload.owner_uid || '',
     owner_name: payload.owner_name || 'Player',
     amount_total: payload.amount_total ?? DEFAULT_LABOR_RATE,
     created_at: payload.created_at || new Date().toISOString(),
@@ -260,7 +367,7 @@ export async function createJob(payload: AnyRecord) {
     request_source: payload.request_source || 'PLAYER_PORTAL',
     payout_released: payload.payout_released || false,
     ...payload,
-  };
+  } as JobRecord;
 
   docData.shop_id = payload.shop_id || SHARED_SHOP_ID;
   docData.status = normalizeStatus(docData.status);
@@ -269,7 +376,7 @@ export async function createJob(payload: AnyRecord) {
   return docData;
 }
 
-export async function updateJob(jobId: string, data: AnyRecord) {
+export async function updateJob(jobId: string, data: Partial<JobRecord> & AnyRecord) {
   const patch: AnyRecord = {
     ...data,
     updated_at: new Date().toISOString(),
@@ -292,7 +399,9 @@ export async function startRestring(jobId: string) {
 }
 
 export async function saveInspection(jobId: string, inspection: AnyRecord = {}) {
-  const nextStatus = inspection.status ? normalizeStatus(inspection.status) : 'FINISHED';
+  const nextStatus = inspection.status
+    ? normalizeStatus(inspection.status)
+    : 'FINISHED';
 
   await updateJob(jobId, {
     ...inspection,
@@ -320,12 +429,14 @@ export async function markJobPaid(jobId: string) {
   );
 }
 
-export async function getShop(shopId: string) {
+export async function getShop(shopId: string): Promise<ShopRecord | null> {
   const snap = await getDoc(doc(db, 'shops', shopId));
-  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+  return snap.exists()
+    ? ({ id: snap.id, ...(snap.data() as Omit<ShopRecord, 'id'>) } as ShopRecord)
+    : null;
 }
 
-export async function updateShop(shopId: string, data: AnyRecord) {
+export async function updateShop(shopId: string, data: Partial<ShopRecord>) {
   await setDoc(
     doc(db, 'shops', shopId),
     {
@@ -336,12 +447,12 @@ export async function updateShop(shopId: string, data: AnyRecord) {
   );
 }
 
-export async function ensureShop(payload?: Partial<AnyRecord>) {
+export async function ensureShop(payload?: Partial<ShopRecord>): Promise<ShopRecord> {
   const shopId = payload?.shop_id || SHARED_SHOP_ID;
   const existing = await getShop(shopId);
   if (existing) return existing;
 
-  const shopData = {
+  const shopData: ShopRecord = {
     shop_id: shopId,
     name: payload?.name || SHARED_SHOP_NAME,
     labor_rate: Number(payload?.labor_rate ?? DEFAULT_LABOR_RATE),
@@ -349,7 +460,7 @@ export async function ensureShop(payload?: Partial<AnyRecord>) {
     wallet_balance: Number(payload?.wallet_balance ?? 0),
     created_at_server: serverTimestamp(),
     ...payload,
-  };
+  } as ShopRecord;
 
   await setDoc(doc(db, 'shops', shopId), shopData, { merge: true });
   return shopData;
@@ -363,7 +474,7 @@ export async function ensurePlayerVisibleShop(shopId?: string) {
   });
 }
 
-export async function addAlert(payload: AnyRecord) {
+export async function addAlert(payload: Partial<AlertRecord>) {
   const id = uid('alert');
 
   await setDoc(
@@ -396,7 +507,7 @@ export async function markAlertsReadForJob(jobId: string) {
   );
 }
 
-export function getStringerNetForJob(job: AnyRecord) {
+export function getStringerNetForJob(job: Partial<JobRecord>) {
   return Math.max(0, Number(job?.amount_total || DEFAULT_LABOR_RATE) - 0.35);
 }
 
@@ -404,6 +515,6 @@ export async function getPendingPayoutTotal(shopId: string) {
   const jobs = await listJobsByShop(shopId);
 
   return jobs
-    .filter((job: AnyRecord) => job.status === 'PAID' && !job.payout_released)
-    .reduce((sum: number, job: AnyRecord) => sum + getStringerNetForJob(job), 0);
+    .filter((job) => job.status === 'PAID' && !job.payout_released)
+    .reduce((sum, job) => sum + getStringerNetForJob(job), 0);
 }
