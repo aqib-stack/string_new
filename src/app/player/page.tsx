@@ -32,7 +32,11 @@ export default function PlayerDashboard() {
       listJobsByOwner(currentUser.uid),
     ]);
     setRacquets(nextRacquets);
-    setJobs(nextJobs.sort((a, b) => (a.created_at < b.created_at ? 1 : -1)));
+    setJobs(
+  nextJobs.sort((a, b) =>
+    (a.createdAt?.seconds || 0) < (b.createdAt?.seconds || 0) ? 1 : -1
+  )
+);
   }
 
   useEffect(() => {
