@@ -6,7 +6,7 @@ import { ArrowRight, BellRing, Clock3, LogOut, ScanLine, Sparkles, WalletCards }
 import { useCurrentUser } from '@/components/RoleGate';
 import { StatusPill } from '@/components/StatusPill';
 import { logoutUser } from '@/lib/authHelpers';
-import { formatJobCode, getJob, listJobsByOwner, listRacquetsByOwner, markJobPaid } from '@/lib/demoData';
+import { formatJobCode, getJob, listJobsByOwner, listRacquetsByOwner, markJobPaid } from '@/lib/firestoreData';
 import { formatLastStringDate, getRacquetHealth } from '@/lib/health';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -25,20 +25,21 @@ export default function PlayerDashboard() {
   const [jobs, setJobs] = useState<any[]>([]);
   const [notice, setNotice] = useState('');
 
-  function refreshData(currentUser = user) {
+  async function refreshData(currentUser = user) {
     if (!currentUser || currentUser.user_role !== 'PLAYER') return;
-    setRacquets(listRacquetsByOwner(currentUser.uid));
-    setJobs(listJobsByOwner(currentUser.uid).sort((a, b) => (a.created_at < b.created_at ? 1 : -1)));
+    const [nextRacquets, nextJobs] = await Promise.all([
+      listRacquetsByOwner(currentUser.uid),
+      listJobsByOwner(currentUser.uid),
+    ]);
+    setRacquets(nextRacquets);
+    setJobs(nextJobs.sort((a, b) => (a.created_at < b.created_at ? 1 : -1)));
   }
 
   useEffect(() => {
     if (!user || user.user_role !== 'PLAYER') return;
-    refreshData(user);
-    const onStorage = () => refreshData(user);
-    window.addEventListener('storage', onStorage);
-    const timer = window.setInterval(() => refreshData(user), 1200);
+    void refreshData(user);
+    const timer = window.setInterval(() => { void refreshData(user); }, 2500);
     return () => {
-      window.removeEventListener('storage', onStorage);
       window.clearInterval(timer);
     };
   }, [user]);
@@ -48,12 +49,14 @@ export default function PlayerDashboard() {
     const params = new URLSearchParams(window.location.search);
     const paidJobId = params.get('paid');
     if (!paidJobId) return;
-    const job = getJob(paidJobId);
-    if (job && job.owner_uid === user.uid && job.status !== 'PAID') {
-      markJobPaid(paidJobId);
-    }
-    setNotice(`Payment received for ${formatJobCode(paidJobId)}. Your racquet is now ready for pickup.`);
-    refreshData(user);
+    (async () => {
+      const job = await getJob(paidJobId);
+      if (job && job.owner_uid === user.uid && job.status !== 'PAID') {
+        await markJobPaid(paidJobId);
+      }
+      setNotice(`Payment received for ${formatJobCode(paidJobId)}. Your racquet is now ready for pickup.`);
+      await refreshData(user);
+    })();
     window.history.replaceState({}, '', window.location.pathname);
   }, [user]);
 

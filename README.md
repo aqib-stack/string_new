@@ -55,3 +55,7 @@ This build follows the client brief exactly: OTP-only auth, lean Firestore schem
 - Connect Stripe Express on Withdraw
 - Run a live $1 payment
 - Confirm webhook updates job, wallet, and restring count
+
+## Shared shop MVP note
+Stringer and player flows both use the shared shop configured by `NEXT_PUBLIC_SHARED_SHOP_ID`.
+Existing stringer users are migrated to that shared shop on sign-in.

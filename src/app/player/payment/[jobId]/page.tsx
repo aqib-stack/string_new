@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { CreditCard, ShieldCheck, Wallet } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { StripePaymentForm } from '@/components/StripePaymentForm';
-import { formatJobCode, getJob, getStringerNetForJob, markJobPaid } from '@/lib/demoData';
+import { formatJobCode, getJob, getStringerNetForJob, markJobPaid } from '@/lib/firestoreData';
 
 export default function PaymentPage({ params }: { params: Promise<{ jobId: string }> }) {
   const [jobId, setJobId] = useState('');
@@ -19,7 +19,7 @@ export default function PaymentPage({ params }: { params: Promise<{ jobId: strin
   useEffect(() => {
     params.then(async ({ jobId }) => {
       setJobId(jobId);
-      const localJob = getJob(jobId);
+      const localJob = await getJob(jobId);
       if (localJob?.amount_total) setJobTotal(localJob.amount_total);
       if (localJob?.status === 'PAID') {
         setAlreadyPaid(true);
@@ -45,7 +45,7 @@ export default function PaymentPage({ params }: { params: Promise<{ jobId: strin
 
   function completeSandboxPayment() {
     if (!jobId) return;
-    markJobPaid(jobId);
+    void markJobPaid(jobId);
     window.location.href = `/player?paid=${jobId}`;
   }
 

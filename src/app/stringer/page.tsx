@@ -7,18 +7,23 @@ import { StatusPill } from '@/components/StatusPill';
 import { logoutUser } from '@/lib/authHelpers';
 import {
   addAlert,
+  confirmDropOff,
   createJob,
   formatJobCode,
+  getOpenJobForRacquet,
   getPendingPayoutTotal,
   getRacquetByTag,
   getShop,
   listAlerts,
   listJobsByShop,
   markAlertsReadForJob,
+  saveInspection as saveInspectionRecord,
+  startRestring,
   updateJob,
   updateShop,
-} from '@/lib/demoData';
+} from '@/lib/firestoreData';
 import { useEffect, useMemo, useState } from 'react';
+import { SHARED_SHOP_ID } from '@/lib/appConstants';
 
 const tabs = ['REQUESTED', 'RECEIVED', 'IN_PROGRESS', 'FINISHED', 'PAID'] as const;
 const tabLabels: Record<(typeof tabs)[number], string> = {
@@ -42,33 +47,45 @@ export default function StringerPage() {
   const [file, setFile] = useState<File | null>(null);
   const [message, setMessage] = useState('');
 
-  const shopId = user?.shop_id || 'demo-shop-1';
+  const shopId = SHARED_SHOP_ID;
 
-  function refresh() {
-    setJobs(listJobsByShop(shopId).sort((a, b) => (a.created_at < b.created_at ? 1 : -1)));
-    setAlerts(listAlerts().filter((alert) => alert.shop_id === shopId));
+  async function refresh() {
+    const [nextJobs, nextAlerts] = await Promise.all([listJobsByShop(shopId), listAlerts(shopId)]);
+    setJobs(
+  nextJobs.sort((a, b) => {
+    const aTime = new Date(a.created_at || a.created_at_server || 0).getTime();
+    const bTime = new Date(b.created_at || b.created_at_server || 0).getTime();
+    return bTime - aTime;
+  })
+);
+    setAlerts(nextAlerts);
   }
 
   useEffect(() => {
     if (!user || user.user_role !== 'STRINGER') return;
-    refresh();
-    const onStorage = () => refresh();
-    window.addEventListener('storage', onStorage);
-    const timer = window.setInterval(refresh, 1200);
+    void refresh();
+    const timer = window.setInterval(() => { void refresh(); }, 2500);
     return () => {
-      window.removeEventListener('storage', onStorage);
       window.clearInterval(timer);
     };
   }, [user, shopId]);
 
-  const filtered = useMemo(() => jobs.filter((job) => job.status === activeTab), [jobs, activeTab]);
-  const wallet = Number(getShop(shopId)?.wallet_balance || 0);
-  const pendingPayout = useMemo(() => getPendingPayoutTotal(shopId), [jobs, shopId]);
+  const filtered = useMemo(() => jobs.filter((job) => String(job.status || '').toUpperCase() === activeTab), [jobs, activeTab]);
+  const [wallet, setWallet] = useState(0);
+  const [pendingPayout, setPendingPayout] = useState(0);
+  useEffect(() => {
+    (async () => {
+      const shop = await getShop(shopId);
+      setWallet(Number(shop?.wallet_balance || 0));
+      setPendingPayout(await getPendingPayoutTotal(shopId));
+    })();
+  }, [jobs, shopId]);
+
   const stats = useMemo(() => ({
-    requested: jobs.filter((job) => job.status === 'REQUESTED').length,
-    received: jobs.filter((job) => job.status === 'RECEIVED').length,
-    inProgress: jobs.filter((job) => job.status === 'IN_PROGRESS').length,
-    ready: jobs.filter((job) => job.status === 'FINISHED').length,
+    requested: jobs.filter((job) => String(job.status || '').toUpperCase() === 'REQUESTED').length,
+    received: jobs.filter((job) => String(job.status || '').toUpperCase() === 'RECEIVED').length,
+    inProgress: jobs.filter((job) => String(job.status || '').toUpperCase() === 'IN_PROGRESS').length,
+    ready: jobs.filter((job) => String(job.status || '').toUpperCase() === 'FINISHED').length,
   }), [jobs]);
 
   async function handleLogout() {
@@ -76,45 +93,88 @@ export default function StringerPage() {
     window.location.href = '/';
   }
 
-  function confirmDropoff(jobId: string) {
-    updateJob(jobId, { status: 'RECEIVED' });
-    markAlertsReadForJob(jobId);
+  async function confirmDropoff(jobId: string) {
+    await confirmDropOff(jobId);
+    await markAlertsReadForJob(jobId);
     setMessage(`Drop-off confirmed for ${formatJobCode(jobId)}.`);
     setActiveTab('RECEIVED');
-    refresh();
+    await refresh();
   }
 
-  function markInProgress(jobId: string) {
-    updateJob(jobId, { status: 'IN_PROGRESS' });
-    markAlertsReadForJob(jobId);
+  async function markInProgress(jobId: string) {
+    await startRestring(jobId);
+    await markAlertsReadForJob(jobId);
     setMessage(`Job ${formatJobCode(jobId)} moved into the active restring queue.`);
     setActiveTab('IN_PROGRESS');
-    refresh();
+    await refresh();
   }
 
-  function saveInspection() {
+  async function saveInspection() {
     if (!selectedJob) return;
     const damage = !(frame && grommets && grip);
-    updateJob(selectedJob.job_id, {
-      inspection_log: { frame, grommets, grip, photo_url: file ? file.name : '' },
-      status: damage ? 'IN_PROGRESS' : 'FINISHED',
-      damage_confirmed: !damage,
-    });
-    setMessage(damage ? `Damage flagged for ${formatJobCode(selectedJob.job_id)}. The job stays in progress.` : `Inspection passed for ${formatJobCode(selectedJob.job_id)}. Waiting for player payment.`);
+
+    if (damage) {
+      await saveInspectionRecord(selectedJob.job_id, {
+        inspection_log: { frame, grommets, grip, photo_url: file ? file.name : '' },
+        status: 'IN_PROGRESS',
+        damage_confirmed: false,
+      });
+    } else {
+      await saveInspectionRecord(selectedJob.job_id, {
+        inspection_log: { frame, grommets, grip, photo_url: file ? file.name : '' },
+        damage_confirmed: true,
+      });
+    }
+
+    setMessage(
+      damage
+        ? `Damage flagged for ${formatJobCode(selectedJob.job_id)}. The job stays in progress.`
+        : `Inspection passed for ${formatJobCode(selectedJob.job_id)}. Waiting for player payment.`
+    );
     setSelectedJob(null);
     setActiveTab(damage ? 'IN_PROGRESS' : 'FINISHED');
-    refresh();
+    await refresh();
   }
 
-  function scanDropoff() {
+  async function scanDropoff() {
     const trimmed = scanTag.trim();
     if (!trimmed) return;
-    const racquet = getRacquetByTag(trimmed) as any;
+
+    const racquet = (await getRacquetByTag(trimmed)) as any;
     if (!racquet) {
       setMessage('No racquet with that GlobeTag is linked to a player bag yet. Ask the player to scan it first.');
       return;
     }
-    const job = createJob({
+
+    const existingOpenJob = await getOpenJobForRacquet(racquet.racquet_id);
+
+    if (existingOpenJob) {
+      if (existingOpenJob.status === 'REQUESTED') {
+        await confirmDropOff(existingOpenJob.job_id);
+        await markAlertsReadForJob(existingOpenJob.job_id);
+        await addAlert({
+          type: 'stringer_scan',
+          job_id: existingOpenJob.job_id,
+          shop_id: shopId,
+          racquet_id: racquet.racquet_id,
+          tag_id: racquet.tag_id,
+          owner_name: racquet.owner_name || 'Player',
+          created_at: new Date().toISOString(),
+          read: true,
+        });
+        setMessage(`Drop-off recorded for ${racquet.tag_id}. The existing player request moved into the received column.`);
+        setActiveTab('RECEIVED');
+        await refresh();
+        return;
+      }
+
+      setMessage(`An active job already exists for ${racquet.tag_id}: ${formatJobCode(existingOpenJob.job_id)} (${existingOpenJob.status}).`);
+      setActiveTab(existingOpenJob.status === 'PAID' ? 'PAID' : (existingOpenJob.status as (typeof tabs)[number]));
+      await refresh();
+      return;
+    }
+
+    const job = await createJob({
       racquet_id: racquet.racquet_id,
       owner_uid: racquet.owner_uid,
       owner_name: racquet.owner_name || 'Player',
@@ -123,7 +183,8 @@ export default function StringerPage() {
       status: 'RECEIVED',
       request_source: 'STRINGER_SCAN',
     });
-    addAlert({
+
+    await addAlert({
       type: 'stringer_scan',
       job_id: job.job_id,
       shop_id: shopId,
@@ -133,21 +194,22 @@ export default function StringerPage() {
       created_at: new Date().toISOString(),
       read: true,
     });
+
     setMessage(`Drop-off scan recorded for ${racquet.tag_id}. The player can now see this job in their portal.`);
     setActiveTab('RECEIVED');
-    refresh();
+    await refresh();
   }
 
-  function withdraw() {
+  async function withdraw() {
     if (!wallet) {
       setMessage('No funds available yet. Paid jobs move into the wallet automatically.');
       return;
     }
     const paidJobs = jobs.filter((job) => job.status === 'PAID' && !job.payout_released);
-    paidJobs.forEach((job) => updateJob(job.job_id, { payout_released: true }));
-    updateShop(shopId, { wallet_balance: 0 });
+    await Promise.all(paidJobs.map((job) => updateJob(job.job_id, { payout_released: true })));
+    await updateShop(shopId, { wallet_balance: 0 });
     setMessage(`Payout initiated for $${wallet.toFixed(2)}.`);
-    refresh();
+    await refresh();
   }
 
   if (loading) return <main className="container"><div className="card">Loading queue…</div></main>;

@@ -1,36 +1,24 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isAuthed() {
-      return request.auth != null;
-    }
-
-    function isStringer() {
-      return isAuthed() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.user_role == 'STRINGER';
-    }
-
-    function isPlayer() {
-      return isAuthed() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.user_role == 'PLAYER';
-    }
-
-    match /users/{uid} {
-      allow read, write: if isAuthed() && request.auth.uid == uid;
-    }
-
-    match /shops/{shopId} {
-      allow read: if isAuthed();
-      allow write: if isStringer();
-    }
-
-    match /racquets/{racquetId} {
-      allow read, write: if isAuthed() && resource.data.owner_uid == request.auth.uid;
-      allow create: if isAuthed() && request.resource.data.owner_uid == request.auth.uid;
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
     match /jobs/{jobId} {
-      allow read: if isAuthed();
-      allow create: if isPlayer();
-      allow update: if isAuthed();
+      allow read, write: if request.auth != null;
+    }
+
+    match /racquets/{racquetId} {
+      allow read, write: if request.auth != null;
+    }
+
+    match /shops/{shopId} {
+      allow read, write: if request.auth != null;
+    }
+
+    match /alerts/{alertId} {
+      allow read, write: if request.auth != null;
     }
   }
 }

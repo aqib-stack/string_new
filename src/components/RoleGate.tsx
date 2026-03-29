@@ -1,26 +1,34 @@
 'use client';
 
-import { getSessionUser } from '@/lib/authHelpers';
-import { useEffect, useState } from 'react';
+import { auth, db } from '@/lib/firebase';
 import type { AppUser } from '@/types';
+import { onAuthStateChanged } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
+import { useEffect, useState } from 'react';
 
 export function useCurrentUser() {
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<AppUser | null>(null);
 
   useEffect(() => {
-    const sync = () => {
-      setUser(getSessionUser());
-      setLoading(false);
-    };
-
-    sync();
-    window.addEventListener('storage', sync);
-    const timer = window.setInterval(sync, 1000);
-    return () => {
-      window.removeEventListener('storage', sync);
-      window.clearInterval(timer);
-    };
+    const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
+        setUser(null);
+        setLoading(false);
+        return;
+      }
+      try {
+        const snap = await getDoc(doc(db, 'users', firebaseUser.uid));
+        if (snap.exists()) {
+          setUser(snap.data() as AppUser);
+        } else {
+          setUser(null);
+        }
+      } finally {
+        setLoading(false);
+      }
+    });
+    return () => unsub();
   }, []);
 
   return { loading, user };

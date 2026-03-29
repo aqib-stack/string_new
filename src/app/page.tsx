@@ -58,7 +58,7 @@ export default function HomePage() {
         <div className="card col-5 grid light-card">
           <span className="kicker">Access</span>
           <h2 className="h2">Account access for every role</h2>
-          <p className="p">Create a player or stringer account, create a player or stringer account and enter the right portal with no demo shortcuts.</p>
+          <p className="p">Create a player or stringer account, create a player or stringer account and enter the right portal with no  shortcuts.</p>
           <div className="action-grid">
             <Link className="btn" href="/auth?mode=signup&role=PLAYER">Player sign up</Link>
             <Link className="btn secondary" href="/auth?mode=signup&role=STRINGER">Stringer sign up</Link>

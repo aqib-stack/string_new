@@ -6,8 +6,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useCurrentUser } from '@/components/RoleGate';
 import { StatusPill } from '@/components/StatusPill';
-import { addAlert, createJob, formatJobCode, getLatestJobForRacquet, getOpenJobForRacquet, getRacquetById, updateRacquet } from '@/lib/demoData';
+import { addAlert, createJob, formatJobCode, getLatestJobForRacquet, getOpenJobForRacquet, getRacquetById, updateRacquet } from '@/lib/firestoreData';
 import { formatLastStringDate, getRacquetHealth } from '@/lib/health';
+import { SHARED_SHOP_ID } from '@/lib/appConstants';
 
 export default function PlayerRacquetDetailPage({ params }: { params: Promise<{ racquetId: string }> }) {
   const router = useRouter();
@@ -20,9 +21,9 @@ export default function PlayerRacquetDetailPage({ params }: { params: Promise<{ 
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
 
-  function refresh(id = racquetId) {
+  async function refresh(id = racquetId) {
     if (!id) return;
-    const nextRacquet = getRacquetById(id);
+    const nextRacquet = await getRacquetById(id);
     setRacquet(nextRacquet);
     setStringType(nextRacquet?.string_type || '');
     setTension(nextRacquet?.tension || '');
@@ -31,55 +32,57 @@ export default function PlayerRacquetDetailPage({ params }: { params: Promise<{ 
   useEffect(() => {
     params.then(({ racquetId }) => {
       setRacquetId(racquetId);
-      const nextRacquet = getRacquetById(racquetId);
-      setRacquet(nextRacquet);
-      setStringType(nextRacquet?.string_type || '');
-      setTension(nextRacquet?.tension || '');
+      void refresh(racquetId);
     });
   }, [params]);
 
   useEffect(() => {
-    const onStorage = () => refresh();
-    window.addEventListener('storage', onStorage);
-    const timer = window.setInterval(() => refresh(), 1200);
+    const timer = window.setInterval(() => { void refresh(); }, 2500);
     return () => {
-      window.removeEventListener('storage', onStorage);
       window.clearInterval(timer);
     };
   }, [racquetId]);
 
-  const latestJob = useMemo(() => (racquet ? getLatestJobForRacquet(racquet.racquet_id) : null), [racquet]);
-  const openJob = useMemo(() => (racquet ? getOpenJobForRacquet(racquet.racquet_id) : null), [racquet]);
+  const [latestJob, setLatestJob] = useState<any | null>(null);
+  const [openJob, setOpenJob] = useState<any | null>(null);
+  useEffect(() => {
+    if (!racquet?.racquet_id) return;
+    (async () => {
+      setLatestJob(await getLatestJobForRacquet(racquet.racquet_id));
+      setOpenJob(await getOpenJobForRacquet(racquet.racquet_id));
+    })();
+  }, [racquet]);
+
   const health = getRacquetHealth(racquet?.last_string_date);
 
   async function saveSetup() {
     if (!racquet) return;
     setSaving(true);
-    updateRacquet(racquet.racquet_id, { string_type: stringType, tension });
+    await updateRacquet(racquet.racquet_id, { string_type: stringType, tension });
     setEditing(false);
     setMessage('Racquet setup updated successfully.');
-    refresh();
+    await refresh();
     setSaving(false);
   }
 
-  function requestStringJob() {
+  async function requestStringJob() {
     if (!user || !racquet) return;
     if (openJob) {
       setMessage(`An active string job already exists: ${formatJobCode(openJob.job_id)}.`);
       return;
     }
-    const job = createJob({
+    const job = await createJob({
       racquet_id: racquet.racquet_id,
       owner_uid: user.uid,
       owner_name: user.name,
-      shop_id: 'demo-shop-1',
+      shop_id: SHARED_SHOP_ID,
       amount_total: 30,
       status: 'REQUESTED',
       request_source: 'PLAYER_PORTAL',
     });
-    addAlert({
+    await addAlert({
       type: 'dropoff_request',
-      shop_id: 'demo-shop-1',
+      shop_id: SHARED_SHOP_ID,
       job_id: job.job_id,
       racquet_id: racquet.racquet_id,
       tag_id: racquet.tag_id,
@@ -88,7 +91,7 @@ export default function PlayerRacquetDetailPage({ params }: { params: Promise<{ 
       read: false,
     });
     setMessage('String job requested. Your pro shop stringer has been notified about the drop-off.');
-    refresh();
+    await refresh();
   }
 
   const primaryAction = useMemo(() => {

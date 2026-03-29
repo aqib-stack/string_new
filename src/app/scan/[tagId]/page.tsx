@@ -5,11 +5,12 @@ import {
   addAlert,
   createJob,
   createRacquet,
-  ensureDemoShop,
+  ensurePlayerVisibleShop,
   getRacquetByTagOwner,
   saveRacquet,
-} from '@/lib/demoData';
+} from '@/lib/firestoreData';
 import { getRacquetHealth } from '@/lib/health';
+import { SHARED_SHOP_ID } from '@/lib/appConstants';
 import { ArrowRight, CheckCircle2, ScanLine, Sparkles } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -31,22 +32,24 @@ export default function ScanTagPage({ params }: { params: Promise<{ tagId: strin
 
   useEffect(() => {
     if (!tagId || !user || user.user_role !== 'PLAYER') return;
-    const existing = getRacquetByTagOwner(tagId, user.uid);
-    setRacquet(existing);
-    if (existing) {
+    (async () => {
+      const existing = await getRacquetByTagOwner(tagId, user.uid);
+      setRacquet(existing);
+      if (existing) {
       setStringType(existing.string_type || 'Poly Tour Pro');
-      setTension(existing.tension || '52 lbs');
-    }
+        setTension(existing.tension || '52 lbs');
+      }
+    })();
   }, [tagId, user]);
 
   async function handlePrimaryAction() {
     if (!user || user.user_role !== 'PLAYER') return;
     setSubmitting(true);
     try {
-      ensureDemoShop({ shop_id: 'demo-shop-1', name: 'Central Court Tennis Lab', labor_rate: 30, owner_uid: 'shop-owner', wallet_balance: 0 });
+            await ensurePlayerVisibleShop();
 
       if (!racquet?.racquet_id) {
-        createRacquet({
+        await createRacquet({
           owner_uid: user.uid,
           owner_name: user.name,
           tag_id: tagId,
@@ -57,7 +60,7 @@ export default function ScanTagPage({ params }: { params: Promise<{ tagId: strin
         return;
       }
 
-      saveRacquet({
+      await saveRacquet({
         ...racquet,
         owner_uid: user.uid,
         owner_name: user.name,
@@ -66,18 +69,18 @@ export default function ScanTagPage({ params }: { params: Promise<{ tagId: strin
         tension,
       });
 
-      const job = createJob({
+      const job = await createJob({
         racquet_id: racquet.racquet_id,
         owner_uid: user.uid,
         owner_name: user.name,
-        shop_id: 'demo-shop-1',
+        shop_id: SHARED_SHOP_ID,
         amount_total: 30,
         status: 'REQUESTED',
         request_source: 'PLAYER_SCAN',
       });
-      addAlert({
+      await addAlert({
         type: 'dropoff_request',
-        shop_id: 'demo-shop-1',
+        shop_id: SHARED_SHOP_ID,
         job_id: job.job_id,
         racquet_id: racquet.racquet_id,
         tag_id: racquet.tag_id,
