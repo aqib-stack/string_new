@@ -23,6 +23,7 @@ import {
   updateShop,
 } from '@/lib/firestoreData';
 import { useEffect, useMemo, useState } from 'react';
+import type { FieldValue } from 'firebase/firestore';
 import { SHARED_SHOP_ID } from '@/lib/appConstants';
 
 const tabs = ['REQUESTED', 'RECEIVED', 'IN_PROGRESS', 'FINISHED', 'PAID'] as const;
@@ -40,22 +41,29 @@ type FirestoreDateValue =
   | Date
   | { seconds: number; nanoseconds?: number }
   | { toDate: () => Date }
+  | { toMillis: () => number }
+  | FieldValue
   | null
   | undefined;
 
-function getTimeValue(value: FirestoreDateValue): number {
+
+  function getTimeValue(value: FirestoreDateValue): number {
   if (!value) return 0;
 
   if (value instanceof Date) {
     return value.getTime();
   }
 
-  if (typeof (value as { toDate?: () => Date }).toDate === 'function') {
-    return (value as { toDate: () => Date }).toDate().getTime();
+  if (typeof value === 'object' && 'toMillis' in value && typeof value.toMillis === 'function') {
+    return value.toMillis();
   }
 
-  if (typeof (value as { seconds?: number }).seconds === 'number') {
-    return (value as { seconds: number }).seconds * 1000;
+  if (typeof value === 'object' && 'toDate' in value && typeof value.toDate === 'function') {
+    return value.toDate().getTime();
+  }
+
+  if (typeof value === 'object' && 'seconds' in value && typeof value.seconds === 'number') {
+    return value.seconds * 1000;
   }
 
   if (typeof value === 'string' || typeof value === 'number') {
