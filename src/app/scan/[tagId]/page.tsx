@@ -77,8 +77,8 @@ export default function ScanTagPage({ params }: { params: Promise<{ tagId: strin
           owner_uid: user.uid,
           owner_name: user.name,
           tag_id: tagId,
-          racquet_name: racquetName || 'My Racquet',
-          racquet_model: racquetModel,
+          racquet_name: racquetName.trim() || 'My Racquet',
+          racquet_model: racquetModel.trim(),
           string_type: stringType,
           tension,
           preferred_shop_id: preferredShop?.shop_id || SHARED_SHOP_ID,
@@ -93,8 +93,8 @@ export default function ScanTagPage({ params }: { params: Promise<{ tagId: strin
         owner_uid: user.uid,
         owner_name: user.name,
         tag_id: tagId,
-        racquet_name: racquetName || racquet.racquet_name,
-        racquet_model: racquetModel || racquet.racquet_model,
+        racquet_name: racquetName.trim() || racquet.racquet_name,
+        racquet_model: racquetModel.trim() || racquet.racquet_model,
         string_type: stringType,
         tension,
         preferred_shop_id: preferredShop?.shop_id || SHARED_SHOP_ID,
@@ -212,6 +212,14 @@ export default function ScanTagPage({ params }: { params: Promise<{ tagId: strin
               <div className={`badge ${health.tone}`}>{health.statusLabel}</div>
             </div>
             <div className="meta-grid">
+              <div>
+                <label className="label">Racquet name</label>
+                <input className="input" value={racquetName} onChange={(e) => setRacquetName(e.target.value)} placeholder="Match racquet" />
+              </div>
+              <div>
+                <label className="label">Racquet model</label>
+                <input className="input" value={racquetModel} onChange={(e) => setRacquetModel(e.target.value)} placeholder="Pure Aero 98" />
+              </div>
               <div>
                 <label className="label">String type</label>
                 <select className="input" value={stringType} onChange={(e) => setStringType(e.target.value)}>
