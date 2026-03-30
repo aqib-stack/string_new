@@ -11,6 +11,7 @@ export type AppUser = {
 export type Shop = {
   shop_id: string;
   name: string;
+  city?: string;
   labor_rate: number;
   owner_uid: string;
   stripe_account_id?: string;
@@ -20,7 +21,12 @@ export type Shop = {
 export type Racquet = {
   racquet_id: string;
   owner_uid: string;
+  owner_name?: string;
   tag_id: string;
+  racquet_name?: string;
+  racquet_model?: string;
+  preferred_shop_id?: string;
+  preferred_shop_name?: string;
   restring_count: number;
   last_string_date?: string;
   string_type: string;
@@ -50,4 +56,9 @@ export type Job = {
   damage_confirmed?: boolean;
   request_source?: JobSource;
   payout_released?: boolean;
+  paid_outside_app?: boolean;
+  pickup_confirmed?: boolean;
+  picked_up_at?: string;
+  proof_photo_url?: string;
+  inspection_note?: string;
 };

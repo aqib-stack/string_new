@@ -10,8 +10,10 @@ import {
   confirmDropOff,
   createJob,
   formatJobCode,
+  getJob,
   getOpenJobForRacquet,
   getPendingPayoutTotal,
+  getRacquetById,
   getRacquetByTag,
   getShop,
   listAlerts,
@@ -20,19 +22,21 @@ import {
   saveInspection as saveInspectionRecord,
   startRestring,
   updateJob,
+  updateRacquet,
   updateShop,
 } from '@/lib/firestoreData';
 import { useEffect, useMemo, useState } from 'react';
 import type { FieldValue } from 'firebase/firestore';
 import { SHARED_SHOP_ID } from '@/lib/appConstants';
 
-const tabs = ['REQUESTED', 'RECEIVED', 'IN_PROGRESS', 'FINISHED', 'PAID'] as const;
+const tabs = ['REQUESTED', 'RECEIVED', 'IN_PROGRESS', 'FINISHED', 'PAID', 'HISTORY'] as const;
 const tabLabels: Record<(typeof tabs)[number], string> = {
   REQUESTED: 'Requested',
   RECEIVED: 'Received',
   IN_PROGRESS: 'In progress',
   FINISHED: 'Finished',
-  PAID: 'Paid',
+  PAID: 'Paid / Awaiting pickup',
+  HISTORY: 'History',
 };
 
 type FirestoreDateValue =
@@ -46,8 +50,7 @@ type FirestoreDateValue =
   | null
   | undefined;
 
-
-  function getTimeValue(value: FirestoreDateValue): number {
+function getTimeValue(value: FirestoreDateValue): number {
   if (!value) return 0;
 
   if (value instanceof Date) {
@@ -86,19 +89,37 @@ export default function StringerPage() {
   const [grip, setGrip] = useState(true);
   const [file, setFile] = useState<File | null>(null);
   const [message, setMessage] = useState('');
+  const [shopName, setShopName] = useState('');
+  const [shopCity, setShopCity] = useState('');
 
   const shopId = SHARED_SHOP_ID;
 
   async function refresh() {
-    const [nextJobs, nextAlerts] = await Promise.all([listJobsByShop(shopId), listAlerts(shopId)]);
+    const [nextJobs, nextAlerts, shop] = await Promise.all([
+      listJobsByShop(shopId),
+      listAlerts(shopId),
+      getShop(shopId),
+    ]);
+
     setJobs(
       nextJobs.sort((a, b) => {
-        const aTime = getTimeValue(a.created_at) || getTimeValue(a.created_at_server);
-        const bTime = getTimeValue(b.created_at) || getTimeValue(b.created_at_server);
+        const aTime =
+          getTimeValue(a.created_at) ||
+          getTimeValue(a.created_at_server) ||
+          getTimeValue(a.updated_at) ||
+          getTimeValue(a.updated_at_server);
+        const bTime =
+          getTimeValue(b.created_at) ||
+          getTimeValue(b.created_at_server) ||
+          getTimeValue(b.updated_at) ||
+          getTimeValue(b.updated_at_server);
         return bTime - aTime;
       })
     );
+
     setAlerts(nextAlerts);
+    setShopName(String(shop?.name || ''));
+    setShopCity(String(shop?.city || shop?.shop_city || ''));
   }
 
   useEffect(() => {
@@ -112,10 +133,17 @@ export default function StringerPage() {
     };
   }, [user, shopId]);
 
-  const filtered = useMemo(
-    () => jobs.filter((job) => String(job.status || '').toUpperCase() === activeTab),
-    [jobs, activeTab]
-  );
+  const filtered = useMemo(() => {
+    const normalize = (value: unknown) => String(value || '').toUpperCase();
+    return jobs.filter((job) => {
+      const status = normalize(job.status);
+      const pickedUp = Boolean(job.picked_up || job.pickup_confirmed || status === 'PICKED_UP');
+
+      if (activeTab === 'HISTORY') return pickedUp;
+      if (activeTab === 'PAID') return status === 'PAID' && !pickedUp;
+      return status === activeTab && !pickedUp;
+    });
+  }, [jobs, activeTab]);
 
   const [wallet, setWallet] = useState(0);
   const [pendingPayout, setPendingPayout] = useState(0);
@@ -130,10 +158,12 @@ export default function StringerPage() {
 
   const stats = useMemo(
     () => ({
-      requested: jobs.filter((job) => String(job.status || '').toUpperCase() === 'REQUESTED').length,
-      received: jobs.filter((job) => String(job.status || '').toUpperCase() === 'RECEIVED').length,
-      inProgress: jobs.filter((job) => String(job.status || '').toUpperCase() === 'IN_PROGRESS').length,
-      ready: jobs.filter((job) => String(job.status || '').toUpperCase() === 'FINISHED').length,
+      requested: jobs.filter((job) => String(job.status || '').toUpperCase() === 'REQUESTED' && !job.picked_up).length,
+      received: jobs.filter((job) => String(job.status || '').toUpperCase() === 'RECEIVED' && !job.picked_up).length,
+      inProgress: jobs.filter((job) => String(job.status || '').toUpperCase() === 'IN_PROGRESS' && !job.picked_up).length,
+      ready: jobs.filter((job) => String(job.status || '').toUpperCase() === 'FINISHED' && !job.picked_up).length,
+      awaitingPickup: jobs.filter((job) => String(job.status || '').toUpperCase() === 'PAID' && !job.picked_up).length,
+      history: jobs.filter((job) => Boolean(job.picked_up || job.pickup_confirmed || String(job.status || '').toUpperCase() === 'PICKED_UP')).length,
     }),
     [jobs]
   );
@@ -166,23 +196,83 @@ export default function StringerPage() {
     if (damage) {
       await saveInspectionRecord(selectedJob.job_id, {
         inspection_log: { frame, grommets, grip, photo_url: file ? file.name : '' },
-        status: 'IN_PROGRESS',
+        inspection_note: 'Damage found during inspection.',
         damage_confirmed: false,
+        status: 'RECEIVED',
       });
+      setMessage(`Damage flagged for ${formatJobCode(selectedJob.job_id)}. The job stays in received until resolved.`);
+      setActiveTab('RECEIVED');
     } else {
       await saveInspectionRecord(selectedJob.job_id, {
         inspection_log: { frame, grommets, grip, photo_url: file ? file.name : '' },
+        inspection_note: '',
         damage_confirmed: true,
+        status: 'IN_PROGRESS',
+      });
+      setMessage(`Inspection passed for ${formatJobCode(selectedJob.job_id)}. The racquet is now in progress.`);
+      setActiveTab('IN_PROGRESS');
+    }
+
+    setSelectedJob(null);
+    await refresh();
+  }
+
+  async function markFinished(jobId: string) {
+    await updateJob(jobId, {
+      status: 'FINISHED',
+      finished_at: new Date().toISOString(),
+    });
+    setMessage(`Job ${formatJobCode(jobId)} marked as finished and ready for payment.`);
+    setActiveTab('FINISHED');
+    await refresh();
+  }
+
+  async function markPaidOutsideApp(jobId: string) {
+    await updateJob(jobId, {
+      status: 'PAID',
+      paid: true,
+      paid_outside_app: true,
+      payment_method: 'OUTSIDE_APP',
+      paid_at: new Date().toISOString(),
+    });
+    setMessage(`Job ${formatJobCode(jobId)} marked as paid outside the app.`);
+    setActiveTab('PAID');
+    await refresh();
+  }
+
+  async function confirmPickup(jobId: string) {
+    const job = await getJob(jobId);
+
+    await updateJob(jobId, {
+      status: 'PICKED_UP',
+      picked_up: true,
+      pickup_confirmed: true,
+      picked_up_at: new Date().toISOString(),
+      payout_released: true,
+    });
+
+    if (job?.racquet_id) {
+      const racquet = await getRacquetById(job.racquet_id);
+
+      await updateRacquet(job.racquet_id, {
+        restring_count: Number(racquet?.restring_count || 0) + 1,
+        last_string_date: new Date().toISOString(),
       });
     }
 
-    setMessage(
-      damage
-        ? `Damage flagged for ${formatJobCode(selectedJob.job_id)}. The job stays in progress.`
-        : `Inspection passed for ${formatJobCode(selectedJob.job_id)}. Waiting for player payment.`
-    );
-    setSelectedJob(null);
-    setActiveTab(damage ? 'IN_PROGRESS' : 'FINISHED');
+    await markAlertsReadForJob(jobId);
+    setMessage(`Pickup confirmed for ${formatJobCode(jobId)}. The job moved to history and the racquet counter was updated.`);
+    setActiveTab('HISTORY');
+    await refresh();
+  }
+
+  async function saveShopProfile() {
+    await updateShop(shopId, {
+      name: shopName,
+      city: shopCity,
+      shop_city: shopCity,
+    } as any);
+    setMessage('Shop profile updated successfully.');
     await refresh();
   }
 
@@ -200,20 +290,8 @@ export default function StringerPage() {
 
     if (existingOpenJob) {
       if (existingOpenJob.status === 'REQUESTED') {
-        await confirmDropOff(existingOpenJob.job_id);
-        await markAlertsReadForJob(existingOpenJob.job_id);
-        await addAlert({
-          type: 'stringer_scan',
-          job_id: existingOpenJob.job_id,
-          shop_id: shopId,
-          racquet_id: racquet.racquet_id,
-          tag_id: racquet.tag_id,
-          owner_name: racquet.owner_name || 'Player',
-          created_at: new Date().toISOString(),
-          read: true,
-        });
-        setMessage(`Drop-off recorded for ${racquet.tag_id}. The existing player request moved into the received column.`);
-        setActiveTab('RECEIVED');
+        setMessage(`GlobeTag ${racquet.tag_id} scanned. Now confirm drop-off to move the job into received.`);
+        setActiveTab('REQUESTED');
         await refresh();
         return;
       }
@@ -234,6 +312,9 @@ export default function StringerPage() {
       amount_total: 30,
       status: 'RECEIVED',
       request_source: 'STRINGER_SCAN',
+      racquet_name: racquet.racquet_name || racquet.name || '',
+      racquet_model: racquet.racquet_model || racquet.model || '',
+      preferred_shop_name: racquet.preferred_shop_name || shopName || '',
     });
 
     await addAlert({
@@ -308,10 +389,9 @@ export default function StringerPage() {
 
           <div className="hero-copy-stack">
             <span className="kicker">Daily queue</span>
-            <h1 className="h1">Track drop-offs, inspections, and payouts in one premium queue.</h1>
+            <h1 className="h1">Track drop-offs, inspection, payment, pickup, and history in one queue.</h1>
             <p className="p lead">
-              Everything from player requests to final payout lives in one cleaner stringer workspace, with step-by-step
-              actions for every job state.
+              Inspection now happens before restringing, outside-app payments can be recorded, and picked-up jobs move into history.
             </p>
           </div>
 
@@ -327,9 +407,9 @@ export default function StringerPage() {
               <span className="summary-meta">Net amount currently available</span>
             </div>
             <div className="summary-card glass-card">
-              <span className="small">Unread alerts</span>
-              <strong>{alerts.filter((a) => !a.read).length}</strong>
-              <span className="summary-meta">New activity from players and scans</span>
+              <span className="small">History jobs</span>
+              <strong>{stats.history}</strong>
+              <span className="summary-meta">Completed and picked up orders</span>
             </div>
           </div>
         </div>
@@ -352,22 +432,22 @@ export default function StringerPage() {
             <div className="stat stat-highlight">
               <span className="small">Requested</span>
               <strong>{stats.requested}</strong>
-              <span className="summary-meta">Player jobs waiting for drop-off confirmation</span>
+              <span className="summary-meta">Waiting for drop-off confirmation</span>
             </div>
             <div className="stat">
               <span className="small">Received</span>
               <strong>{stats.received}</strong>
-              <span className="summary-meta">Jobs physically at the shop</span>
+              <span className="summary-meta">Inspect before stringing</span>
             </div>
             <div className="stat">
               <span className="small">In progress</span>
               <strong>{stats.inProgress}</strong>
-              <span className="summary-meta">Racquets on the machine or in inspection</span>
+              <span className="summary-meta">Racquets on the machine</span>
             </div>
             <div className="stat">
-              <span className="small">Ready for payment</span>
-              <strong>{stats.ready}</strong>
-              <span className="summary-meta">Waiting on player checkout to release payout</span>
+              <span className="small">Awaiting pickup</span>
+              <strong>{stats.awaitingPickup}</strong>
+              <span className="summary-meta">Can be marked paid</span>
             </div>
           </div>
         </div>
@@ -376,13 +456,10 @@ export default function StringerPage() {
           <div className="topbar">
             <div className="section-heading">
               <span className="kicker">Drop-off scan</span>
-              <h2 className="h2">Create a job at the shop</h2>
+              <h2 className="h2">Scan GlobeTag</h2>
             </div>
             <ScanLine size={18} />
           </div>
-          <p className="p">
-            If a player walks in with the racquet, scan the GlobeTag here and the job will appear in both portals instantly.
-          </p>
           <div>
             <label className="label">GlobeTag</label>
             <input
@@ -392,7 +469,7 @@ export default function StringerPage() {
               placeholder="Enter GlobeTag"
             />
           </div>
-          <button className="btn" onClick={scanDropoff}>Create job from drop-off scan</button>
+          <button className="btn" onClick={scanDropoff}>Scan GlobeTag</button>
           <button className="btn secondary" onClick={withdraw}><Wallet size={16} /> Withdraw balance</button>
         </div>
       </section>
@@ -402,14 +479,14 @@ export default function StringerPage() {
           <div className="topbar">
             <div className="section-heading">
               <span className="kicker">Notifications</span>
-              <h2 className="h2">Player requests and shop activity</h2>
+              <h2 className="h2">Player requests and notes</h2>
             </div>
             <BellRing size={18} />
           </div>
           <div className="list notification-list-premium">
             {alerts.slice(0, 4).map((alert) => (
               <div className="meta-item notification-item" key={alert.id}>
-                <strong>{alert.type === 'dropoff_request' ? 'Player requested drop-off' : 'Stringer scan recorded'}</strong>
+                <strong>{alert.type === 'dropoff_request' ? 'Player requested drop-off' : 'Shop activity'}</strong>
                 <div>{alert.owner_name || 'Player'} • {alert.tag_id || '—'}</div>
               </div>
             ))}
@@ -419,32 +496,18 @@ export default function StringerPage() {
 
         <div className="card col-5 grid strong section-card">
           <div className="section-heading">
-            <span className="kicker">Workflow</span>
-            <h2 className="h2">How the queue moves</h2>
+            <span className="kicker">Shop profile</span>
+            <h2 className="h2">Name and city players can search</h2>
           </div>
-          <div className="workflow-stack">
-            <div className="workflow-item">
-              <ClipboardList size={18} />
-              <div>
-                <strong>Request</strong>
-                <span>Player scan or portal request lands in the requested column.</span>
-              </div>
-            </div>
-            <div className="workflow-item">
-              <ShieldCheck size={18} />
-              <div>
-                <strong>Inspect</strong>
-                <span>Confirm drop-off, start restring, then record inspection details.</span>
-              </div>
-            </div>
-            <div className="workflow-item">
-              <CheckCircle2 size={18} />
-              <div>
-                <strong>Payout</strong>
-                <span>Player payment unlocks the wallet and makes the payout withdrawable.</span>
-              </div>
-            </div>
+          <div>
+            <label className="label">Shop name</label>
+            <input className="input" value={shopName} onChange={(e) => setShopName(e.target.value)} />
           </div>
+          <div>
+            <label className="label">City</label>
+            <input className="input" value={shopCity} onChange={(e) => setShopCity(e.target.value)} />
+          </div>
+          <button className="btn" onClick={saveShopProfile}>Save shop profile</button>
         </div>
       </section>
 
@@ -478,41 +541,64 @@ export default function StringerPage() {
                 </div>
                 <StatusPill status={job.status} />
               </div>
+
               <div className="job-meta-grid">
                 <div className="small">
                   Source: {job.request_source === 'STRINGER_SCAN' ? 'Created by shop drop-off scan' : 'Created from the player side'}
                 </div>
                 <div className="small">
-                  {job.status === 'PAID' ? 'Paid by player' : 'Job total'}: ${Number(job.amount_total || 30).toFixed(2)}
+                  Job total: ${Number(job.amount_total || 30).toFixed(2)}
                 </div>
               </div>
+
               {job.status === 'REQUESTED' ? (
-                <div className="notice">Player requested a job. Confirm drop-off once the racquet arrives at the shop.</div>
+                <div className="notice">Player requested a job. Scan the GlobeTag and confirm once the racquet is physically received.</div>
               ) : null}
+
               {job.status === 'RECEIVED' ? (
-                <div className="notice">Drop-off confirmed. This racquet is ready to enter the restring queue.</div>
+                <div className="notice">Inspect the racquet before you begin stringing.</div>
               ) : null}
+
+              {job.status === 'IN_PROGRESS' ? (
+                <div className="notice">Inspection completed. Finish the restring when the racquet is ready.</div>
+              ) : null}
+
               {job.status === 'FINISHED' ? (
-                <div className="notice warn">Waiting for player payment before payout is released.</div>
+                <div className="notice warn">Stringing is complete. Collect payment in-app or outside the app.</div>
               ) : null}
+
               {job.status === 'PAID' ? (
-                <div className="notice success">
-                  Paid successfully. Net payout is now {job.payout_released ? 'processing in payout' : 'withdrawable'}.
-                </div>
+                <div className="notice success">Paid successfully. Confirm pickup after the player collects the racquet.</div>
               ) : null}
+
+              {(job.picked_up || job.pickup_confirmed || String(job.status || '').toUpperCase() === 'PICKED_UP') ? (
+                <div className="notice success">Pickup confirmed. This job is now stored in history.</div>
+              ) : null}
+
               <div className="inline-actions">
                 {job.status === 'REQUESTED' ? (
                   <button className="btn small-btn" onClick={() => confirmDropoff(job.job_id)}>Confirm drop-off</button>
                 ) : null}
+
                 {job.status === 'RECEIVED' ? (
-                  <button className="btn small-btn" onClick={() => markInProgress(job.job_id)}>Start restring</button>
-                ) : null}
-                {job.status !== 'FINISHED' && job.status !== 'PAID' && job.status !== 'REQUESTED' ? (
                   <button className="btn secondary small-btn" onClick={() => setSelectedJob(job)}>Inspect racquet</button>
+                ) : null}
+
+                {job.status === 'IN_PROGRESS' ? (
+                  <button className="btn small-btn" onClick={() => markFinished(job.job_id)}>Finish restring</button>
+                ) : null}
+
+                {job.status === 'FINISHED' ? (
+                  <button className="btn small-btn" onClick={() => markPaidOutsideApp(job.job_id)}>Mark paid outside app</button>
+                ) : null}
+
+                {job.status === 'PAID' && !job.picked_up && !job.pickup_confirmed ? (
+                  <button className="btn small-btn" onClick={() => confirmPickup(job.job_id)}>Confirm pickup</button>
                 ) : null}
               </div>
             </div>
           ))}
+
           {filtered.length === 0 ? <div className="small">No jobs in this column yet.</div> : null}
         </div>
       </section>
@@ -522,7 +608,7 @@ export default function StringerPage() {
           <div className="section-heading">
             <span className="kicker">Inspection</span>
             <h2 className="h2">Job {formatJobCode(selectedJob.job_id)}</h2>
-            <p className="p section-subtle">Log condition checks before you send the racquet to the finished state.</p>
+            <p className="p section-subtle">Log condition checks before you send the racquet into progress.</p>
           </div>
           <div className="inspection-checks">
             <label className="check-row">
