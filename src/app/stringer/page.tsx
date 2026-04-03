@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { BellRing, CheckCircle2, ClipboardList, LogOut, ScanLine, ShieldCheck, Wallet } from 'lucide-react';
+import { BellRing, LogOut, ScanLine, Wallet } from 'lucide-react';
 import { useCurrentUser } from '@/components/RoleGate';
 import { StatusPill } from '@/components/StatusPill';
 import { logoutUser } from '@/lib/authHelpers';
@@ -10,24 +10,21 @@ import {
   confirmDropOff,
   createJob,
   formatJobCode,
-  getJob,
   getOpenJobForRacquet,
   getPendingPayoutTotal,
-  getRacquetById,
   getRacquetByTag,
   getShop,
   listAlerts,
   listJobsByShop,
   markAlertsReadForJob,
+  markJobPaidOutsideApp,
   saveInspection as saveInspectionRecord,
   startRestring,
   updateJob,
-  updateRacquet,
   updateShop,
 } from '@/lib/firestoreData';
 import { useEffect, useMemo, useState } from 'react';
 import type { FieldValue } from 'firebase/firestore';
-import { SHARED_SHOP_ID } from '@/lib/appConstants';
 
 const tabs = ['REQUESTED', 'RECEIVED', 'IN_PROGRESS', 'FINISHED', 'PAID', 'HISTORY'] as const;
 const tabLabels: Record<(typeof tabs)[number], string> = {
@@ -84,17 +81,17 @@ export default function StringerPage() {
   const [activeTab, setActiveTab] = useState<(typeof tabs)[number]>('REQUESTED');
   const [selectedJob, setSelectedJob] = useState<any | null>(null);
   const [scanTag, setScanTag] = useState('globetag-001');
-  const [frame, setFrame] = useState(true);
-  const [grommets, setGrommets] = useState(true);
-  const [grip, setGrip] = useState(true);
+  const [flagReason, setFlagReason] = useState<'FRAME' | 'GROMMETS' | ''>('');
   const [file, setFile] = useState<File | null>(null);
   const [message, setMessage] = useState('');
   const [shopName, setShopName] = useState('');
   const [shopCity, setShopCity] = useState('');
 
-  const shopId = SHARED_SHOP_ID;
+  const shopId = user?.shop_id || '';
 
   async function refresh() {
+    if (!shopId) return;
+
     const [nextJobs, nextAlerts, shop] = await Promise.all([
       listJobsByShop(shopId),
       listAlerts(shopId),
@@ -123,7 +120,7 @@ export default function StringerPage() {
   }
 
   useEffect(() => {
-    if (!user || user.user_role !== 'STRINGER') return;
+    if (!user || user.user_role !== 'STRINGER' || !shopId) return;
     void refresh();
     const timer = window.setInterval(() => {
       void refresh();
@@ -149,6 +146,8 @@ export default function StringerPage() {
   const [pendingPayout, setPendingPayout] = useState(0);
 
   useEffect(() => {
+    if (!shopId) return;
+
     (async () => {
       const shop = await getShop(shopId);
       setWallet(Number(shop?.wallet_balance || 0));
@@ -167,6 +166,15 @@ export default function StringerPage() {
     }),
     [jobs]
   );
+
+  const tabCounts: Record<(typeof tabs)[number], number> = {
+    REQUESTED: stats.requested,
+    RECEIVED: stats.received,
+    IN_PROGRESS: stats.inProgress,
+    FINISHED: stats.ready,
+    PAID: stats.awaitingPickup,
+    HISTORY: stats.history,
+  };
 
   async function handleLogout() {
     await logoutUser();
@@ -189,31 +197,69 @@ export default function StringerPage() {
     await refresh();
   }
 
-  async function saveInspection() {
-    if (!selectedJob) return;
-    const damage = !(frame && grommets && grip);
+  async function flagRacquet() {
+    if (!selectedJob || !flagReason) return;
 
-    if (damage) {
-      await saveInspectionRecord(selectedJob.job_id, {
-        inspection_log: { frame, grommets, grip, photo_url: file ? file.name : '' },
-        inspection_note: 'Damage found during inspection.',
-        damage_confirmed: false,
-        status: 'RECEIVED',
-      });
-      setMessage(`Damage flagged for ${formatJobCode(selectedJob.job_id)}. The job stays in received until resolved.`);
-      setActiveTab('RECEIVED');
-    } else {
-      await saveInspectionRecord(selectedJob.job_id, {
-        inspection_log: { frame, grommets, grip, photo_url: file ? file.name : '' },
-        inspection_note: '',
-        damage_confirmed: true,
-        status: 'IN_PROGRESS',
-      });
-      setMessage(`Inspection passed for ${formatJobCode(selectedJob.job_id)}. The racquet is now in progress.`);
-      setActiveTab('IN_PROGRESS');
-    }
+    await saveInspectionRecord(selectedJob.job_id, {
+      inspection_log: {
+        frame: flagReason !== 'FRAME',
+        grommets: flagReason !== 'GROMMETS',
+        grip: true,
+        photo_url: file ? file.name : '',
+      },
+      inspection_note:
+        flagReason === 'FRAME'
+          ? 'Frame is in bad condition. Please contact your stringer.'
+          : 'Grommets are in bad condition. Please contact your stringer.',
+      flagged_issue: flagReason,
+      damage_confirmed: false,
+      status: 'RECEIVED',
+    });
 
+    await addAlert({
+      type: 'racquet_flagged',
+      owner_uid: selectedJob.owner_uid,
+      owner_name: selectedJob.owner_name,
+      shop_id: selectedJob.shop_id,
+      job_id: selectedJob.job_id,
+      racquet_id: selectedJob.racquet_id,
+      note:
+        flagReason === 'FRAME'
+          ? 'Frame is in bad condition. Please contact your stringer.'
+          : 'Grommets are in bad condition. Please contact your stringer.',
+      read: false,
+    });
+
+    setMessage(`Racquet flagged for ${formatJobCode(selectedJob.job_id)}.`);
     setSelectedJob(null);
+    setFlagReason('');
+    setFile(null);
+    setActiveTab('RECEIVED');
+    await refresh();
+  }
+
+  async function passAndBeginStringing() {
+    if (!selectedJob) return;
+
+    await saveInspectionRecord(selectedJob.job_id, {
+      inspection_log: {
+        frame: true,
+        grommets: true,
+        grip: true,
+        photo_url: file ? file.name : '',
+      },
+      inspection_note: '',
+      flagged_issue: '',
+      damage_confirmed: true,
+      status: 'IN_PROGRESS',
+      started_at: new Date().toISOString(),
+    });
+
+    setMessage(`Inspection passed for ${formatJobCode(selectedJob.job_id)}. Stringing started.`);
+    setSelectedJob(null);
+    setFlagReason('');
+    setFile(null);
+    setActiveTab('IN_PROGRESS');
     await refresh();
   }
 
@@ -228,45 +274,15 @@ export default function StringerPage() {
   }
 
   async function markPaidOutsideApp(jobId: string) {
-    await updateJob(jobId, {
-      status: 'PAID',
-      paid: true,
-      paid_outside_app: true,
-      payment_method: 'OUTSIDE_APP',
-      paid_at: new Date().toISOString(),
-    });
+    await markJobPaidOutsideApp(jobId);
     setMessage(`Job ${formatJobCode(jobId)} marked as paid outside the app.`);
     setActiveTab('PAID');
     await refresh();
   }
 
-  async function confirmPickup(jobId: string) {
-    const job = await getJob(jobId);
-
-    await updateJob(jobId, {
-      status: 'PICKED_UP',
-      picked_up: true,
-      pickup_confirmed: true,
-      picked_up_at: new Date().toISOString(),
-      payout_released: true,
-    });
-
-    if (job?.racquet_id) {
-      const racquet = await getRacquetById(job.racquet_id);
-
-      await updateRacquet(job.racquet_id, {
-        restring_count: Number(racquet?.restring_count || 0) + 1,
-        last_string_date: new Date().toISOString(),
-      });
-    }
-
-    await markAlertsReadForJob(jobId);
-    setMessage(`Pickup confirmed for ${formatJobCode(jobId)}. The job moved to history and the racquet counter was updated.`);
-    setActiveTab('HISTORY');
-    await refresh();
-  }
-
   async function saveShopProfile() {
+    if (!shopId) return;
+
     await updateShop(shopId, {
       name: shopName,
       city: shopCity,
@@ -278,7 +294,7 @@ export default function StringerPage() {
 
   async function scanDropoff() {
     const trimmed = scanTag.trim();
-    if (!trimmed) return;
+    if (!trimmed || !shopId) return;
 
     const racquet = (await getRacquetByTag(trimmed)) as any;
     if (!racquet) {
@@ -315,6 +331,7 @@ export default function StringerPage() {
       racquet_name: racquet.racquet_name || racquet.name || '',
       racquet_model: racquet.racquet_model || racquet.model || '',
       preferred_shop_name: racquet.preferred_shop_name || shopName || '',
+      dropped_off_at: new Date().toISOString(),
     });
 
     await addAlert({
@@ -334,7 +351,7 @@ export default function StringerPage() {
   }
 
   async function withdraw() {
-    if (!wallet) {
+    if (!wallet || !shopId) {
       setMessage('No funds available yet. Paid jobs move into the wallet automatically.');
       return;
     }
@@ -391,7 +408,7 @@ export default function StringerPage() {
             <span className="kicker">Daily queue</span>
             <h1 className="h1">Track drop-offs, inspection, payment, pickup, and history in one queue.</h1>
             <p className="p lead">
-              Inspection now happens before restringing, outside-app payments can be recorded, and picked-up jobs move into history.
+              Inspection now happens before restringing, outside-app payments can be recorded, and pickup confirmation is handled by the player.
             </p>
           </div>
 
@@ -447,7 +464,7 @@ export default function StringerPage() {
             <div className="stat">
               <span className="small">Awaiting pickup</span>
               <strong>{stats.awaitingPickup}</strong>
-              <span className="summary-meta">Can be marked paid</span>
+              <span className="summary-meta">Waiting for player pickup</span>
             </div>
           </div>
         </div>
@@ -525,7 +542,28 @@ export default function StringerPage() {
                 className={`tab ${activeTab === tab ? 'active' : ''}`}
                 onClick={() => setActiveTab(tab)}
               >
-                {tabLabels[tab]}
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                  <span>{tabLabels[tab]}</span>
+                  {tabCounts[tab] > 0 ? (
+                    <span
+                      style={{
+                        minWidth: 18,
+                        height: 18,
+                        borderRadius: 999,
+                        background: '#dc2626',
+                        color: '#fff',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        padding: '0 6px',
+                      }}
+                    >
+                      {tabCounts[tab]}
+                    </span>
+                  ) : null}
+                </span>
               </button>
             ))}
           </div>
@@ -568,7 +606,7 @@ export default function StringerPage() {
               ) : null}
 
               {job.status === 'PAID' ? (
-                <div className="notice success">Paid successfully. Confirm pickup after the player collects the racquet.</div>
+                <div className="notice success">Paid successfully. Waiting for player pickup confirmation.</div>
               ) : null}
 
               {(job.picked_up || job.pickup_confirmed || String(job.status || '').toUpperCase() === 'PICKED_UP') ? (
@@ -591,10 +629,6 @@ export default function StringerPage() {
                 {job.status === 'FINISHED' ? (
                   <button className="btn small-btn" onClick={() => markPaidOutsideApp(job.job_id)}>Mark paid outside app</button>
                 ) : null}
-
-                {job.status === 'PAID' && !job.picked_up && !job.pickup_confirmed ? (
-                  <button className="btn small-btn" onClick={() => confirmPickup(job.job_id)}>Confirm pickup</button>
-                ) : null}
               </div>
             </div>
           ))}
@@ -608,23 +642,52 @@ export default function StringerPage() {
           <div className="section-heading">
             <span className="kicker">Inspection</span>
             <h2 className="h2">Job {formatJobCode(selectedJob.job_id)}</h2>
-            <p className="p section-subtle">Log condition checks before you send the racquet into progress.</p>
+            <p className="p section-subtle">Choose whether to flag the racquet or pass it into stringing.</p>
           </div>
-          <div className="inspection-checks">
+
+          <div className="grid" style={{ gap: 12 }}>
+            <div className="small" style={{ fontWeight: 700 }}>Flag racquet</div>
+
             <label className="check-row">
-              <input type="checkbox" checked={frame} onChange={(e) => setFrame(e.target.checked)} /> <span>Frame is in good condition</span>
+              <input
+                type="radio"
+                name="flagReason"
+                checked={flagReason === 'GROMMETS'}
+                onChange={() => setFlagReason('GROMMETS')}
+              />
+              <span>Grommets are in bad condition</span>
             </label>
+
             <label className="check-row">
-              <input type="checkbox" checked={grommets} onChange={(e) => setGrommets(e.target.checked)} /> <span>Grommets are in good condition</span>
+              <input
+                type="radio"
+                name="flagReason"
+                checked={flagReason === 'FRAME'}
+                onChange={() => setFlagReason('FRAME')}
+              />
+              <span>Frame is in bad condition</span>
             </label>
-            <label className="check-row">
-              <input type="checkbox" checked={grip} onChange={(e) => setGrip(e.target.checked)} /> <span>Grip is in good condition</span>
-            </label>
-          </div>
-          <input className="input" type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-          <div className="inline-actions">
-            <button className="btn small-btn" onClick={saveInspection}>Save inspection</button>
-            <button className="btn secondary small-btn" onClick={() => setSelectedJob(null)}>Cancel</button>
+
+            <input className="input" type="file" accept="image/*" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+
+            <div className="inline-actions">
+              <button className="btn secondary small-btn" onClick={flagRacquet} disabled={!flagReason}>
+                Flag Racquet
+              </button>
+              <button className="btn small-btn" onClick={passAndBeginStringing}>
+                Pass · Begin Stringing
+              </button>
+              <button
+                className="btn secondary small-btn"
+                onClick={() => {
+                  setSelectedJob(null);
+                  setFlagReason('');
+                  setFile(null);
+                }}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </section>
       ) : null}

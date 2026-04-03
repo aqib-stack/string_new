@@ -82,6 +82,16 @@ export interface JobRecord {
   proof_photo_url?: string;
   inspection_note?: string;
   inspection_completed?: boolean;
+
+  requested_at?: string;
+  dropped_off_at?: string;
+  started_at?: string;
+  finished_at?: string;
+  paid_at?: string;
+
+  flagged_issue?: 'FRAME' | 'GROMMETS' | '';
+  pickup_reminder_sent_at?: string;
+
   [key: string]: any;
 }
 
@@ -93,6 +103,7 @@ export interface AlertRecord {
   read_at?: string;
   job_id?: string;
   shop_id?: string;
+  owner_uid?: string;
   owner_name?: string;
   racquet_id?: string;
   tag_id?: string;
@@ -122,6 +133,10 @@ export function formatJobCode(jobId: string) {
 
 function uid(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function nowIso() {
+  return new Date().toISOString();
 }
 
 function toMillis(value: TimestampLike): number {
@@ -258,6 +273,20 @@ export async function listAlerts(shopId?: string): Promise<AlertRecord[]> {
   return sortByNewest(items);
 }
 
+export async function listAlertsByOwner(ownerUid: string): Promise<AlertRecord[]> {
+  const snap = await getDocs(query(collection(db, 'alerts'), where('owner_uid', '==', ownerUid)));
+
+  const items: AlertRecord[] = snap.docs.map(
+    (d) =>
+      normalizeAlert({
+        id: d.id,
+        ...(d.data() as Omit<AlertRecord, 'id'>),
+      }) as AlertRecord
+  );
+
+  return sortByNewest(items);
+}
+
 export async function listShops(): Promise<ShopRecord[]> {
   const snap = await getDocs(query(collection(db, 'shops')));
   const items: ShopRecord[] = snap.docs.map(
@@ -339,7 +368,7 @@ export async function createRacquet(payload: Partial<RacquetRecord>): Promise<Ra
     last_string_date: payload.last_string_date || '',
     string_type: payload.string_type || 'Poly Tour Pro',
     tension: payload.tension || '52 lbs',
-    created_at: payload.created_at || new Date().toISOString(),
+    created_at: payload.created_at || nowIso(),
     created_at_server: serverTimestamp(),
     ...payload,
   } as RacquetRecord;
@@ -357,7 +386,7 @@ export async function updateRacquet(racquetId: string, data: Partial<RacquetReco
     doc(db, 'racquets', racquetId),
     {
       ...data,
-      updated_at: new Date().toISOString(),
+      updated_at: nowIso(),
       updated_at_server: serverTimestamp(),
     },
     { merge: true }
@@ -366,18 +395,20 @@ export async function updateRacquet(racquetId: string, data: Partial<RacquetReco
 
 export async function createJob(payload: Partial<JobRecord>): Promise<JobRecord> {
   const job_id = payload.job_id || uid('job');
+  const createdAt = payload.created_at || nowIso();
+  const normalizedStatus = normalizeStatus(payload.status || 'REQUESTED');
 
   const docData: JobRecord = {
     job_id,
     racquet_id: payload.racquet_id || '',
     shop_id: payload.shop_id || SHARED_SHOP_ID,
-    status: normalizeStatus(payload.status || 'REQUESTED'),
+    status: normalizedStatus,
     owner_uid: payload.owner_uid || '',
     owner_name: payload.owner_name || 'Player',
     amount_total: payload.amount_total ?? DEFAULT_LABOR_RATE,
-    created_at: payload.created_at || new Date().toISOString(),
+    created_at: createdAt,
     created_at_server: serverTimestamp(),
-    updated_at: new Date().toISOString(),
+    updated_at: nowIso(),
     updated_at_server: serverTimestamp(),
     payment_intent_id: payload.payment_intent_id || '',
     damage_confirmed: payload.damage_confirmed ?? true,
@@ -388,11 +419,15 @@ export async function createJob(payload: Partial<JobRecord>): Promise<JobRecord>
     proof_photo_url: payload.proof_photo_url || '',
     inspection_note: payload.inspection_note || '',
     inspection_completed: payload.inspection_completed || false,
+    requested_at: payload.requested_at || createdAt,
+    dropped_off_at: payload.dropped_off_at || '',
+    started_at: payload.started_at || '',
+    finished_at: payload.finished_at || '',
+    paid_at: payload.paid_at || '',
+    flagged_issue: payload.flagged_issue || '',
+    pickup_reminder_sent_at: payload.pickup_reminder_sent_at || '',
     ...payload,
   } as JobRecord;
-
-  docData.shop_id = payload.shop_id || SHARED_SHOP_ID;
-  docData.status = normalizeStatus(docData.status);
 
   await setDoc(doc(db, 'jobs', job_id), docData, { merge: true });
   return docData;
@@ -401,7 +436,7 @@ export async function createJob(payload: Partial<JobRecord>): Promise<JobRecord>
 export async function updateJob(jobId: string, data: Partial<JobRecord> & AnyRecord) {
   const patch: AnyRecord = {
     ...data,
-    updated_at: new Date().toISOString(),
+    updated_at: nowIso(),
     updated_at_server: serverTimestamp(),
   };
 
@@ -413,11 +448,17 @@ export async function updateJob(jobId: string, data: Partial<JobRecord> & AnyRec
 }
 
 export async function confirmDropOff(jobId: string) {
-  await updateJob(jobId, { status: 'RECEIVED' });
+  await updateJob(jobId, {
+    status: 'RECEIVED',
+    dropped_off_at: nowIso(),
+  });
 }
 
 export async function startRestring(jobId: string) {
-  await updateJob(jobId, { status: 'IN_PROGRESS' });
+  await updateJob(jobId, {
+    status: 'IN_PROGRESS',
+    started_at: nowIso(),
+  });
 }
 
 export async function saveInspection(jobId: string, inspection: AnyRecord = {}) {
@@ -427,15 +468,19 @@ export async function saveInspection(jobId: string, inspection: AnyRecord = {}) 
     ...inspection,
     status: nextStatus,
     inspection_completed: true,
-    inspection_saved_at: new Date().toISOString(),
+    inspection_saved_at: nowIso(),
   });
 }
 
 export async function markJobPaid(jobId: string) {
   const job = await getJob(jobId);
   if (!job) return;
+  if (job.status === 'PAID') return;
 
-  await updateJob(jobId, { status: 'PAID' });
+  await updateJob(jobId, {
+    status: 'PAID',
+    paid_at: nowIso(),
+  });
 
   const shop = await getShop(job.shop_id);
   const current = Number(shop?.wallet_balance || 0);
@@ -453,8 +498,13 @@ export async function markJobPaid(jobId: string) {
 export async function markJobPaidOutsideApp(jobId: string) {
   const job = await getJob(jobId);
   if (!job) return;
+  if (job.status === 'PAID') return;
 
-  await updateJob(jobId, { status: 'PAID', paid_outside_app: true });
+  await updateJob(jobId, {
+    status: 'PAID',
+    paid_outside_app: true,
+    paid_at: nowIso(),
+  });
 
   const shop = await getShop(job.shop_id);
   const current = Number(shop?.wallet_balance || 0);
@@ -470,11 +520,25 @@ export async function markJobPaidOutsideApp(jobId: string) {
 }
 
 export async function markJobPickedUp(jobId: string) {
+  const job = await getJob(jobId);
+  if (!job) return;
+
   await updateJob(jobId, {
     status: 'PICKED_UP',
     pickup_confirmed: true,
-    picked_up_at: new Date().toISOString(),
+    picked_up_at: nowIso(),
   });
+
+  if (job.racquet_id) {
+    const racquet = await getRacquetById(job.racquet_id);
+
+    if (racquet) {
+      await updateRacquet(job.racquet_id, {
+        restring_count: Number(racquet.restring_count || 0) + 1,
+        last_string_date: nowIso(),
+      });
+    }
+  }
 }
 
 export async function getShop(shopId: string): Promise<ShopRecord | null> {
@@ -529,7 +593,7 @@ export async function addAlert(payload: Partial<AlertRecord>) {
     {
       id,
       read: false,
-      created_at: new Date().toISOString(),
+      created_at: nowIso(),
       created_at_server: serverTimestamp(),
       ...payload,
     },
@@ -546,10 +610,37 @@ export async function markAlertsReadForJob(jobId: string) {
     snap.docs.map((d) =>
       updateDoc(d.ref, {
         read: true,
-        read_at: new Date().toISOString(),
+        read_at: nowIso(),
       })
     )
   );
+}
+
+export async function sendPickupReminderIfNeeded(job: Partial<JobRecord>) {
+  if (!job?.job_id || !job?.owner_uid || job.status !== 'PAID' || job.pickup_confirmed) return false;
+
+  const paidAt = toMillis(job.paid_at || job.updated_at || job.created_at);
+  if (!paidAt) return false;
+
+  const twoDaysMs = 2 * 24 * 60 * 60 * 1000;
+  const isDue = Date.now() - paidAt >= twoDaysMs;
+
+  if (!isDue || job.pickup_reminder_sent_at) return false;
+
+  await addAlert({
+    type: 'pickup_reminder',
+    owner_uid: job.owner_uid,
+    job_id: job.job_id,
+    shop_id: job.shop_id,
+    note: 'Your racquet is still waiting for pickup. If you already picked it up, please confirm pickup.',
+    read: false,
+  });
+
+  await updateJob(job.job_id, {
+    pickup_reminder_sent_at: nowIso(),
+  });
+
+  return true;
 }
 
 export function getStringerNetForJob(job: Partial<JobRecord>) {

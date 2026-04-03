@@ -14,6 +14,7 @@ import {
   getOpenJobForRacquet,
   getRacquetById,
   listShops,
+  markJobPickedUp,
   updateRacquet,
 } from '@/lib/firestoreData';
 import { formatLastStringDate, getRacquetHealth } from '@/lib/health';
@@ -134,8 +135,18 @@ export default function PlayerRacquetDetailPage({ params }: { params: Promise<{ 
     await refresh();
   }
 
+  async function confirmPickup() {
+    if (!latestJob) return;
+    await markJobPickedUp(latestJob.job_id);
+    setMessage(`Pickup confirmed for ${formatJobCode(latestJob.job_id)}.`);
+    await refresh();
+  }
+
   const primaryAction = useMemo(() => {
-    if (!latestJob || latestJob.status === 'PICKED_UP') return { type: 'button' as const, label: 'Request string job', disabled: false };
+    if (!latestJob || latestJob.status === 'PICKED_UP') {
+      return { type: 'button' as const, label: 'Request string job', disabled: false };
+    }
+
     switch (latestJob.status) {
       case 'REQUESTED':
         return { type: 'button' as const, label: 'Drop-off requested', disabled: true };
@@ -198,7 +209,7 @@ export default function PlayerRacquetDetailPage({ params }: { params: Promise<{ 
           {latestJob?.status === 'RECEIVED' ? <div className="notice">The racquet is at the pro shop and has been checked in.</div> : null}
           {latestJob?.status === 'IN_PROGRESS' ? <div className="notice">The stringer has completed inspection and is now working on this racquet.</div> : null}
           {latestJob?.status === 'FINISHED' ? <div className="notice">This job is complete and waiting for payment before pickup.</div> : null}
-          {latestJob?.status === 'PAID' ? <div className="notice success">Paid successfully. Waiting for stringer pickup confirmation.</div> : null}
+          {latestJob?.status === 'PAID' ? <div className="notice success">Paid successfully. Please confirm pickup once you collect the racquet.</div> : null}
           {latestJob?.status === 'PICKED_UP' ? <div className="notice success">Picked up successfully. This order now lives in your history.</div> : null}
           <div className="inline-actions">
             {primaryAction.type === 'link' ? (
@@ -206,6 +217,9 @@ export default function PlayerRacquetDetailPage({ params }: { params: Promise<{ 
             ) : (
               <button className="btn small-btn" onClick={requestStringJob} disabled={primaryAction.disabled}>{primaryAction.label}</button>
             )}
+            {latestJob?.status === 'PAID' && !latestJob?.pickup_confirmed ? (
+              <button className="btn small-btn" onClick={confirmPickup}>Confirm pickup</button>
+            ) : null}
             <button className="btn secondary small-btn" onClick={() => router.push('/player')}>Back to portal</button>
           </div>
         </div>

@@ -8,24 +8,65 @@ import {
   signOut,
 } from 'firebase/auth';
 import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
-import { SHARED_SHOP_ID, SHARED_SHOP_NAME, DEFAULT_LABOR_RATE } from './appConstants';
+import { DEFAULT_LABOR_RATE } from './appConstants';
+
+function slugifyShopName(value: string) {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+}
+
+function buildShopId(user: { uid: string; name?: string }) {
+  const base = slugifyShopName(user.name || 'pro-shop') || 'pro-shop';
+  return `shop-${base}-${user.uid.slice(0, 8)}`;
+}
+
+function buildShopName(user: { name?: string }) {
+  const clean = (user.name || '').trim();
+  return clean ? `${clean}'s Pro Shop` : 'My Pro Shop';
+}
 
 async function ensureStringerShop(user: AppUser) {
-  if (user.user_role !== 'STRINGER') return;
+  if (user.user_role !== 'STRINGER') return user;
 
-  const shopId = SHARED_SHOP_ID;
-  await setDoc(doc(db, 'shops', shopId), {
+  const existingUserSnap = await getDoc(doc(db, 'users', user.uid));
+  const existingUser = existingUserSnap.exists() ? (existingUserSnap.data() as Partial<AppUser>) : null;
+
+  const shopId = existingUser?.shop_id || user.shop_id || buildShopId(user);
+  const shopName = buildShopName(user);
+
+  const shopPayload: Record<string, any> = {
     shop_id: shopId,
-    name: SHARED_SHOP_NAME,
+    name: shopName,
     owner_uid: user.uid,
     labor_rate: DEFAULT_LABOR_RATE,
-    wallet_balance: 0,
-    created_at_server: serverTimestamp(),
-  }, { merge: true });
+    updated_at_server: serverTimestamp(),
+  };
 
-  await setDoc(doc(db, 'users', user.uid), {
+  if (existingUser?.shop_id !== shopId) {
+    shopPayload.wallet_balance = 0;
+    shopPayload.created_at_server = serverTimestamp();
+  }
+
+  await setDoc(doc(db, 'shops', shopId), shopPayload, { merge: true });
+
+  await setDoc(
+    doc(db, 'users', user.uid),
+    {
+      shop_id: shopId,
+      name: user.name,
+      updated_at_server: serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return {
+    ...user,
     shop_id: shopId,
-  }, { merge: true });
+  };
 }
 
 export async function signUpWithPassword(payload: {
@@ -35,23 +76,33 @@ export async function signUpWithPassword(payload: {
   role: UserRole;
 }) {
   const email = payload.email.trim().toLowerCase();
+  const name = payload.name.trim();
+
   const cred = await createUserWithEmailAndPassword(auth, email, payload.password);
 
-  const appUser: AppUser = {
+  let appUser: AppUser = {
     uid: cred.user.uid,
     user_role: payload.role,
-    name: payload.name.trim(),
+    name,
     phone: '',
-    shop_id: payload.role === 'STRINGER' ? SHARED_SHOP_ID : null,
+    shop_id: payload.role === 'STRINGER' ? buildShopId({ uid: cred.user.uid, name }) : null,
   };
 
-  await setDoc(doc(db, 'users', cred.user.uid), {
-    ...appUser,
-    email,
-    created_at_server: serverTimestamp(),
-  }, { merge: true });
+  await setDoc(
+    doc(db, 'users', cred.user.uid),
+    {
+      ...appUser,
+      email,
+      created_at_server: serverTimestamp(),
+      updated_at_server: serverTimestamp(),
+    },
+    { merge: true }
+  );
 
-  await ensureStringerShop(appUser);
+  if (payload.role === 'STRINGER') {
+    appUser = await ensureStringerShop(appUser);
+  }
+
   return appUser;
 }
 
@@ -69,18 +120,18 @@ export async function signInWithPassword(payload: {
   }
 
   const raw = snap.data() as AppUser & { user_role: UserRole };
+
   if (raw.user_role !== payload.role) {
     throw new Error(`This account is set up as a ${raw.user_role.toLowerCase()}. Switch roles to continue.`);
   }
 
-  const data: AppUser = {
+  let data: AppUser = {
     ...raw,
-    shop_id: raw.user_role === 'STRINGER' ? SHARED_SHOP_ID : raw.shop_id || null,
+    shop_id: raw.user_role === 'STRINGER' ? raw.shop_id || buildShopId(raw) : raw.shop_id || null,
   };
 
-  if (raw.user_role === 'STRINGER') {
-    await setDoc(doc(db, 'users', cred.user.uid), { shop_id: SHARED_SHOP_ID }, { merge: true });
-    await ensureStringerShop(data);
+  if (data.user_role === 'STRINGER') {
+    data = await ensureStringerShop(data);
   }
 
   return data;

@@ -6,7 +6,17 @@ import { ArrowRight, History, LogOut, ScanLine, WalletCards } from 'lucide-react
 import { useCurrentUser } from '@/components/RoleGate';
 import { StatusPill } from '@/components/StatusPill';
 import { logoutUser } from '@/lib/authHelpers';
-import { formatJobCode, getJob, listJobsByOwner, listRacquetsByOwner, markJobPaid } from '@/lib/firestoreData';
+import {
+  addAlert,
+  createJob,
+  formatJobCode,
+  getJob,
+  listJobsByOwner,
+  listRacquetsByOwner,
+  markJobPaid,
+  markJobPickedUp,
+  sendPickupReminderIfNeeded,
+} from '@/lib/firestoreData';
 import { formatLastStringDate, getRacquetHealth } from '@/lib/health';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -18,32 +28,47 @@ function getTimeValue(value: any): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
+function formatTimeline(value: any) {
+  const time = getTimeValue(value);
+  if (!time) return '—';
+  return new Date(time).toLocaleString();
+}
+
 export default function PlayerDashboard() {
   const { user, loading } = useCurrentUser();
   const [racquets, setRacquets] = useState<any[]>([]);
   const [jobs, setJobs] = useState<any[]>([]);
   const [notice, setNotice] = useState('');
+  const [requestingRacquetId, setRequestingRacquetId] = useState('');
 
   async function refreshData(currentUser = user) {
     if (!currentUser || currentUser.user_role !== 'PLAYER') return;
+
     const [nextRacquets, nextJobs] = await Promise.all([
       listRacquetsByOwner(currentUser.uid),
       listJobsByOwner(currentUser.uid),
     ]);
+
+    const sortedJobs = nextJobs.sort((a, b) => {
+      const aTime = getTimeValue(a.created_at) || getTimeValue(a.created_at_server);
+      const bTime = getTimeValue(b.created_at) || getTimeValue(b.created_at_server);
+      return bTime - aTime;
+    });
+
+    for (const job of sortedJobs) {
+      await sendPickupReminderIfNeeded(job);
+    }
+
     setRacquets(nextRacquets);
-    setJobs(
-      nextJobs.sort((a, b) => {
-        const aTime = getTimeValue(a.created_at) || getTimeValue(a.created_at_server);
-        const bTime = getTimeValue(b.created_at) || getTimeValue(b.created_at_server);
-        return bTime - aTime;
-      })
-    );
+    setJobs(sortedJobs);
   }
 
   useEffect(() => {
     if (!user || user.user_role !== 'PLAYER') return;
     void refreshData(user);
-    const timer = window.setInterval(() => { void refreshData(user); }, 2500);
+    const timer = window.setInterval(() => {
+      void refreshData(user);
+    }, 2500);
     return () => window.clearInterval(timer);
   }, [user]);
 
@@ -52,20 +77,73 @@ export default function PlayerDashboard() {
     const params = new URLSearchParams(window.location.search);
     const paidJobId = params.get('paid');
     if (!paidJobId) return;
+
     (async () => {
       const job = await getJob(paidJobId);
       if (job && job.owner_uid === user.uid && job.status !== 'PAID') {
         await markJobPaid(paidJobId);
       }
-      setNotice(`Payment received for ${formatJobCode(paidJobId)}. Your racquet is now waiting for pickup confirmation.`);
+      setNotice(`Payment received for ${formatJobCode(paidJobId)}. Your racquet is now waiting for pickup.`);
       await refreshData(user);
     })();
+
     window.history.replaceState({}, '', window.location.pathname);
   }, [user]);
 
   async function handleLogout() {
     await logoutUser();
     window.location.href = '/';
+  }
+
+  async function requestFromBag(racquet: any) {
+    if (!user) return;
+
+    const openJob = jobs.find(
+      (job) => job.racquet_id === racquet.racquet_id && job.status !== 'PICKED_UP'
+    );
+
+    if (openJob) {
+      setNotice(`An active string job already exists for ${racquet.racquet_name || racquet.tag_id}.`);
+      return;
+    }
+
+    try {
+      setRequestingRacquetId(racquet.racquet_id);
+
+      const job = await createJob({
+        racquet_id: racquet.racquet_id,
+        owner_uid: user.uid,
+        owner_name: user.name,
+        shop_id: racquet.preferred_shop_id,
+        amount_total: 30,
+        status: 'REQUESTED',
+        request_source: 'PLAYER_PORTAL',
+        requested_at: new Date().toISOString(),
+      });
+
+      await addAlert({
+        type: 'dropoff_request',
+        shop_id: racquet.preferred_shop_id,
+        owner_uid: user.uid,
+        owner_name: user.name,
+        job_id: job.job_id,
+        racquet_id: racquet.racquet_id,
+        tag_id: racquet.tag_id,
+        note: `${racquet.racquet_name || racquet.tag_id} requested from player bag`,
+        read: false,
+      });
+
+      setNotice(`Restring request sent for ${racquet.racquet_name || racquet.tag_id}.`);
+      await refreshData(user);
+    } finally {
+      setRequestingRacquetId('');
+    }
+  }
+
+  async function confirmPickup(job: any) {
+    await markJobPickedUp(job.job_id);
+    setNotice(`Pickup confirmed for ${formatJobCode(job.job_id)}.`);
+    await refreshData(user);
   }
 
   const activeJobs = useMemo(() => jobs.filter((job) => job.status !== 'PICKED_UP'), [jobs]);
@@ -137,7 +215,7 @@ export default function PlayerDashboard() {
             <div className="section-heading">
               <span className="kicker">Bag</span>
               <h2 className="h2">My racquets</h2>
-              <p className="p section-subtle">Each racquet now includes racquet name, model, saved setup, and preferred stringer details.</p>
+              <p className="p section-subtle">You can now request restring directly from the bag.</p>
             </div>
             <Link className="btn secondary small-btn" href="/onboarding">Add racquet</Link>
           </div>
@@ -156,8 +234,10 @@ export default function PlayerDashboard() {
               {racquets.map((racquet) => {
                 const health = getRacquetHealth(racquet.last_string_date);
                 const latestJobForRacquet = jobs.find((job) => job.racquet_id === racquet.racquet_id) || null;
+                const hasOpenJob = Boolean(latestJobForRacquet && latestJobForRacquet.status !== 'PICKED_UP');
+
                 return (
-                  <Link key={racquet.racquet_id} className="card link-card premium-link-card" href={`/player/racquet/${racquet.racquet_id}`}>
+                  <div key={racquet.racquet_id} className="card premium-link-card">
                     <div className="racquet-card racquet-card-premium">
                       <div className="racquet-thumb racquet-thumb-premium">
                         <Image src="/racquet-card.svg" alt="Racquet illustration" width={88} height={88} />
@@ -174,15 +254,29 @@ export default function PlayerDashboard() {
                             {latestJobForRacquet ? <StatusPill status={latestJobForRacquet.status} /> : null}
                           </div>
                         </div>
+
                         <div className="meta-grid">
                           <div className="meta-item"><strong>Strings</strong>{racquet.string_type}</div>
                           <div className="meta-item"><strong>Tension</strong>{racquet.tension}</div>
                           <div className="meta-item"><strong>Preferred shop</strong>{racquet.preferred_shop_name || 'Not selected'}</div>
                           <div className="meta-item"><strong>Last string date</strong>{formatLastStringDate(racquet.last_string_date)}</div>
                         </div>
+
+                        <div className="inline-actions">
+                          <Link className="btn secondary small-btn" href={`/player/racquet/${racquet.racquet_id}`}>
+                            Open details
+                          </Link>
+                          <button
+                            className="btn small-btn"
+                            onClick={() => requestFromBag(racquet)}
+                            disabled={hasOpenJob || requestingRacquetId === racquet.racquet_id}
+                          >
+                            {hasOpenJob ? 'Job already active' : requestingRacquetId === racquet.racquet_id ? 'Requesting…' : 'Request restring'}
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </Link>
+                  </div>
                 );
               })}
             </div>
@@ -209,9 +303,15 @@ export default function PlayerDashboard() {
             <h2 className="h2">Current jobs</h2>
           </div>
         </div>
+
         <div className="list premium-job-list">
           {activeJobs.map((job) => {
             const racquet = racquets.find((item) => item.racquet_id === job.racquet_id);
+            const showReminder =
+              job.status === 'PAID' &&
+              !job.pickup_confirmed &&
+              Date.now() - getTimeValue(job.paid_at || job.updated_at || job.created_at) >= 2 * 24 * 60 * 60 * 1000;
+
             return (
               <div className="card premium-job-card" key={job.job_id}>
                 <div className="row between wrap">
@@ -222,11 +322,26 @@ export default function PlayerDashboard() {
                   </div>
                   <StatusPill status={job.status} />
                 </div>
+
                 {job.inspection_note ? <div className="notice warn">Stringer note: {job.inspection_note}</div> : null}
-                {job.status === 'PAID' ? <div className="notice success">Paid successfully. This job stays here until the stringer confirms pickup.</div> : null}
+                {job.flagged_issue ? <div className="notice warn">Please contact your stringer. Flagged issue: {job.flagged_issue.toLowerCase()}.</div> : null}
+                {showReminder ? <div className="notice warn">Reminder: your racquet has been waiting for pickup for 2+ days. If you already picked it up, please confirm pickup.</div> : null}
+
+                <div className="meta-grid">
+                  <div className="meta-item"><strong>Requested</strong>{formatTimeline(job.requested_at || job.created_at)}</div>
+                  <div className="meta-item"><strong>Dropped off</strong>{formatTimeline(job.dropped_off_at)}</div>
+                  <div className="meta-item"><strong>Ready</strong>{formatTimeline(job.finished_at)}</div>
+                  <div className="meta-item"><strong>Picked up</strong>{formatTimeline(job.picked_up_at)}</div>
+                </div>
+
                 <div className="inline-actions">
                   <Link className="btn secondary small-btn" href={`/player/racquet/${job.racquet_id}`}>Open racquet</Link>
                   {job.status === 'FINISHED' ? <Link className="btn small-btn" href={`/player/payment/${job.job_id}`}><WalletCards size={16} /> Pay now</Link> : null}
+                  {job.status === 'PAID' && !job.pickup_confirmed ? (
+                    <button className="btn small-btn" onClick={() => confirmPickup(job)}>
+                      Confirm pickup
+                    </button>
+                  ) : null}
                 </div>
               </div>
             );
