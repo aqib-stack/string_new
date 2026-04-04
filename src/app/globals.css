@@ -291,7 +291,7 @@ main { min-height: 100vh; }
 }
 .brand-mark-light { color: white; }
 .section-heading { display:grid; gap:6px; }
-.inline-actions { display:flex; gap:10px; flex-wrap:wrap; margin-top: 10px; }
+.inline-actions { display:flex; gap:10px; flex-wrap:wrap; margin-top: 10px; align-items: center; }
 .divider { height: 1px; background: rgba(16,47,86,0.08); }
 
 @media (max-width: 980px) {
@@ -335,9 +335,6 @@ main { min-height: 100vh; }
   border-radius: 999px;
   background: radial-gradient(circle, rgba(84,184,255,0.18), rgba(84,184,255,0));
   pointer-events: none;
-}
-.hero-media-photo {
-  background: radial-gradient(circle at 30% 30%, rgba(126, 227, 255, 0.24), rgba(126, 227, 255, 0.05));
 }
 .premium-shell { gap: 18px; }
 .premium-hero-inner { gap: 18px; }
@@ -592,4 +589,21 @@ main { min-height: 100vh; }
   .job-highlight-top,
   .job-highlight-footer,
   .job-meta-grid { flex-direction: column; align-items: flex-start; }
+}
+
+.readiness-wrap{display:grid;gap:8px}
+.readiness-meta{display:flex;justify-content:space-between;align-items:center;font-size:.92rem}
+.readiness-track{height:10px;background:#e5e7eb;border-radius:999px;overflow:hidden}
+.readiness-fill{height:100%;background:linear-gradient(90deg,#22c55e 0%,#84cc16 45%,#eab308 75%,#ef4444 100%);border-radius:999px}
+.progress-line{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin:20px 0 40px;align-items:start}
+.progress-step{display:grid;grid-template-rows:10px auto;gap:8px;justify-items:center;align-items:start;width:100%;font-size:.72rem;color:#94a3b8;text-align:center}
+.progress-label{display:block;width:100%;line-height:1.2;letter-spacing:.02em}
+.progress-step.active{color:#0f172a;font-weight:700}
+.progress-dot{width:10px;height:10px;border-radius:999px;background:#cbd5e1;display:block}
+.progress-step.active .progress-dot{background:#2563eb}
+.status-chip.red{background:#fee2e2;color:#b91c1c}
+.badge.slate{background:#e2e8f0;color:#334155}
+
+.premium-job-card .h3 + .small {
+    margin-top: 5px;
 }

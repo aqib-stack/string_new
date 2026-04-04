@@ -32,10 +32,12 @@ type TimestampLike =
 export type JobStatus =
   | 'REQUESTED'
   | 'RECEIVED'
+  | 'AWAITING_PLAYER'
   | 'IN_PROGRESS'
   | 'FINISHED'
   | 'PAID'
-  | 'PICKED_UP';
+  | 'PICKED_UP'
+  | 'CANCELLED';
 
 export interface RacquetRecord {
   id?: string;
@@ -47,10 +49,18 @@ export interface RacquetRecord {
   racquet_model?: string;
   preferred_shop_id?: string;
   preferred_shop_name?: string;
+  preferred_shop_business_name?: string;
   restring_count: number;
   last_string_date: string;
   string_type: string;
   tension: string;
+  is_hybrid?: boolean;
+  hybrid_setup?: {
+    mains_string?: string;
+    mains_tension?: string;
+    crosses_string?: string;
+    crosses_tension?: string;
+  };
   created_at?: string;
   created_at_server?: TimestampLike;
   updated_at?: string;
@@ -82,6 +92,10 @@ export interface JobRecord {
   proof_photo_url?: string;
   inspection_note?: string;
   inspection_completed?: boolean;
+  labor_cost?: number;
+  string_cost?: number;
+  customer_provided_string?: boolean;
+  payment_requested_at?: string;
 
   requested_at?: string;
   dropped_off_at?: string;
@@ -90,6 +104,16 @@ export interface JobRecord {
   paid_at?: string;
 
   flagged_issue?: 'FRAME' | 'GROMMETS' | '';
+  flagged_issues?: string[];
+  flagged_photo_urls?: string[];
+  awaiting_player_response?: boolean;
+  approved_to_continue?: boolean;
+  approved_at?: string;
+  cancelled_at?: string;
+  cancelled_by?: 'PLAYER' | 'STRINGER' | '';
+  cancel_reason?: string;
+  player_feedback?: 'TOO_TIGHT' | 'PERFECT' | 'TOO_LOOSE' | '';
+  player_feedback_at?: string;
   pickup_reminder_sent_at?: string;
 
   [key: string]: any;
@@ -191,6 +215,7 @@ function normalizeStatus(status?: string): JobStatus {
   if (value === 'ON_MACHINE') return 'IN_PROGRESS';
   if (value === 'INSPECTION_SAVED') return 'FINISHED';
   if (value === 'COMPLETED') return 'FINISHED';
+  if (value === 'FLAGGED') return 'AWAITING_PLAYER';
 
   return value as JobStatus;
 }
@@ -348,7 +373,7 @@ export async function getOpenJobForRacquet(racquetId: string): Promise<JobRecord
   const latest = await getLatestJobForRacquet(racquetId);
   if (!latest) return null;
 
-  const closedStatuses: JobStatus[] = ['PICKED_UP'];
+  const closedStatuses: JobStatus[] = ['PICKED_UP', 'CANCELLED'];
   return closedStatuses.includes(normalizeStatus(latest.status)) ? null : latest;
 }
 
@@ -368,6 +393,8 @@ export async function createRacquet(payload: Partial<RacquetRecord>): Promise<Ra
     last_string_date: payload.last_string_date || '',
     string_type: payload.string_type || 'Poly Tour Pro',
     tension: payload.tension || '52 lbs',
+    is_hybrid: Boolean(payload.is_hybrid),
+    hybrid_setup: payload.hybrid_setup || undefined,
     created_at: payload.created_at || nowIso(),
     created_at_server: serverTimestamp(),
     ...payload,
@@ -419,12 +446,26 @@ export async function createJob(payload: Partial<JobRecord>): Promise<JobRecord>
     proof_photo_url: payload.proof_photo_url || '',
     inspection_note: payload.inspection_note || '',
     inspection_completed: payload.inspection_completed || false,
+    labor_cost: payload.labor_cost ?? DEFAULT_LABOR_RATE,
+    string_cost: payload.string_cost ?? 0,
+    customer_provided_string: payload.customer_provided_string || false,
+    payment_requested_at: payload.payment_requested_at || '',
     requested_at: payload.requested_at || createdAt,
     dropped_off_at: payload.dropped_off_at || '',
     started_at: payload.started_at || '',
     finished_at: payload.finished_at || '',
     paid_at: payload.paid_at || '',
     flagged_issue: payload.flagged_issue || '',
+    flagged_issues: payload.flagged_issues || [],
+    flagged_photo_urls: payload.flagged_photo_urls || [],
+    awaiting_player_response: payload.awaiting_player_response || false,
+    approved_to_continue: payload.approved_to_continue || false,
+    approved_at: payload.approved_at || '',
+    cancelled_at: payload.cancelled_at || '',
+    cancelled_by: payload.cancelled_by || '',
+    cancel_reason: payload.cancel_reason || '',
+    player_feedback: payload.player_feedback || '',
+    player_feedback_at: payload.player_feedback_at || '',
     pickup_reminder_sent_at: payload.pickup_reminder_sent_at || '',
     ...payload,
   } as JobRecord;
@@ -451,6 +492,39 @@ export async function confirmDropOff(jobId: string) {
   await updateJob(jobId, {
     status: 'RECEIVED',
     dropped_off_at: nowIso(),
+  });
+}
+
+export async function approveFlaggedJob(jobId: string) {
+  await updateJob(jobId, {
+    status: 'RECEIVED',
+    awaiting_player_response: false,
+    approved_to_continue: true,
+    approved_at: nowIso(),
+  });
+}
+
+export async function cancelJob(jobId: string, cancelledBy: 'PLAYER' | 'STRINGER', reason = '') {
+  const job = await getJob(jobId);
+  if (!job) return;
+  const status = normalizeStatus(job.status);
+  if (!['REQUESTED', 'RECEIVED', 'AWAITING_PLAYER'].includes(status)) {
+    throw new Error('This job can no longer be cancelled.');
+  }
+
+  await updateJob(jobId, {
+    status: 'CANCELLED',
+    cancelled_at: nowIso(),
+    cancelled_by: cancelledBy,
+    cancel_reason: reason,
+    awaiting_player_response: false,
+  });
+}
+
+export async function savePlayerFeedback(jobId: string, feedback: 'TOO_TIGHT' | 'PERFECT' | 'TOO_LOOSE') {
+  await updateJob(jobId, {
+    player_feedback: feedback,
+    player_feedback_at: nowIso(),
   });
 }
 

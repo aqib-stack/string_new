@@ -8,11 +8,18 @@ import { useEffect, useMemo, useState } from 'react';
 import { StripePaymentForm } from '@/components/StripePaymentForm';
 import { formatJobCode, getJob, getStringerNetForJob, markJobPaid } from '@/lib/firestoreData';
 
+function formatMoney(value: number) {
+  return `$${Number(value || 0).toFixed(2)}`;
+}
+
 export default function PaymentPage({ params }: { params: Promise<{ jobId: string }> }) {
   const [jobId, setJobId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [loadingIntent, setLoadingIntent] = useState(true);
   const [jobTotal, setJobTotal] = useState(30);
+  const [laborCost, setLaborCost] = useState(20);
+  const [stringCost, setStringCost] = useState(10);
+  const [customerProvided, setCustomerProvided] = useState(false);
   const [alreadyPaid, setAlreadyPaid] = useState(false);
   const stripePromise = useMemo(() => loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || ''), []);
 
@@ -20,7 +27,12 @@ export default function PaymentPage({ params }: { params: Promise<{ jobId: strin
     params.then(async ({ jobId }) => {
       setJobId(jobId);
       const localJob = await getJob(jobId);
-      if (localJob?.amount_total) setJobTotal(localJob.amount_total);
+      if (localJob) {
+        setJobTotal(Number(localJob.amount_total || 30));
+        setLaborCost(Number(localJob.labor_cost || 20));
+        setStringCost(Number(localJob.string_cost || 0));
+        setCustomerProvided(Boolean(localJob.customer_provided_string));
+      }
       if (localJob?.status === 'PAID') {
         setAlreadyPaid(true);
         setLoadingIntent(false);
@@ -55,11 +67,11 @@ export default function PaymentPage({ params }: { params: Promise<{ jobId: strin
         <div className="hero-inner premium-hero-inner">
           <span className="kicker">Pickup payment</span>
           <h1 className="h1">Complete payment for {formatJobCode(jobId || 'job')}</h1>
-          <p className="p lead">A cleaner checkout summary shows exactly what the player pays, what the platform keeps, and what the stringer receives after pickup.</p>
+          <p className="p lead">The stringer has already priced this job for you. Review the breakdown and complete payment on one screen.</p>
           <div className="hero-summary-grid payment-summary-hero">
-            <div className="summary-card glass-card"><span className="small">Player pays</span><strong>${Number(jobTotal).toFixed(2)}</strong><span className="summary-meta">Visible total at pickup</span></div>
+            <div className="summary-card glass-card"><span className="small">Player pays</span><strong>{formatMoney(jobTotal)}</strong><span className="summary-meta">Full amount requested by the stringer</span></div>
             <div className="summary-card glass-card"><span className="small">Platform fee</span><strong>$0.35</strong><span className="summary-meta">StringGlobe transaction fee</span></div>
-            <div className="summary-card glass-card"><span className="small">Stringer receives</span><strong>${getStringerNetForJob({ amount_total: jobTotal }).toFixed(2)}</strong><span className="summary-meta">Net amount routed into the wallet</span></div>
+            <div className="summary-card glass-card"><span className="small">Stringer receives</span><strong>{formatMoney(getStringerNetForJob({ amount_total: jobTotal }))}</strong><span className="summary-meta">Net amount routed into the wallet</span></div>
           </div>
         </div>
       </section>
@@ -67,10 +79,12 @@ export default function PaymentPage({ params }: { params: Promise<{ jobId: strin
       <section className="panel-grid">
         <div className="card col-5 grid strong section-card">
           <span className="kicker">Payment summary</span>
-          <h2 className="h2">What this release does</h2>
+          <h2 className="h2">What you are paying for</h2>
           <div className="meta-grid">
-            <div className="meta-item"><strong>Status</strong>{alreadyPaid ? 'Paid' : 'Awaiting payment'}</div>
-            <div className="meta-item"><strong>Pickup release</strong>{alreadyPaid ? 'Unlocked' : 'After payment confirmation'}</div>
+            <div className="meta-item"><strong>Labor</strong>{formatMoney(laborCost)}</div>
+            <div className="meta-item"><strong>String cost</strong>{customerProvided ? '$0.00' : formatMoney(stringCost)}</div>
+            <div className="meta-item"><strong>String source</strong>{customerProvided ? 'Customer provided string' : 'Stringer supplied string'}</div>
+            <div className="meta-item"><strong>Total</strong>{formatMoney(jobTotal)}</div>
           </div>
           <div className="workflow-stack compact-stack">
             <div className="workflow-item"><CreditCard size={18} /><div><strong>Player checkout</strong><span>Completing payment marks the job paid and updates the player portal instantly.</span></div></div>
@@ -94,7 +108,7 @@ export default function PaymentPage({ params }: { params: Promise<{ jobId: strin
           ) : (
             <div className="grid payment-fallback-grid">
               <div className="notice">Live Stripe keys are not connected in this environment yet, so you can complete the sandbox payment below.</div>
-              <button className="btn" onClick={completeSandboxPayment}>Complete sandbox payment</button>
+              <button className="btn" onClick={completeSandboxPayment}>Complete sandbox payment for {formatMoney(jobTotal)}</button>
             </div>
           )}
         </div>

@@ -12,7 +12,9 @@ export default function AuthPageClient() {
   const searchParams = useSearchParams();
   const [mode, setMode] = useState<'signup' | 'signin'>((searchParams.get('mode') as 'signup' | 'signin') || 'signup');
   const [role, setRole] = useState<UserRole>((searchParams.get('role') as UserRole) || 'PLAYER');
-  const [name, setName] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [businessName, setBusinessName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -34,11 +36,13 @@ export default function AuthPageClient() {
     setMessage('');
     try {
       if (mode === 'signup') {
-        if (!name.trim()) throw new Error('Please enter your full name.');
+        if (!firstName.trim()) throw new Error('Please enter a first name.');
+        if (!lastName.trim()) throw new Error('Please enter a last name.');
+        if (role === 'STRINGER' && !businessName.trim()) throw new Error('Please enter a business name.');
         if (!password) throw new Error('Please enter a password.');
         if (password.length < 6) throw new Error('Password should be at least 6 characters.');
         if (password !== confirmPassword) throw new Error('Passwords do not match.');
-        const appUser = await signUpWithPassword({ name, email, password, role });
+        const appUser = await signUpWithPassword({ firstName, lastName, businessName, email, password, role });
         setMessage('Account created successfully. Redirecting now…');
         const destination = nextTarget || (appUser.user_role === 'STRINGER' ? '/stringer' : '/player');
         router.replace(destination);
@@ -65,12 +69,7 @@ export default function AuthPageClient() {
           <div className="auth-copy light-copy">
             <Image src="/stringglobe-logo.svg" alt="StringGlobe" width={220} height={46} className="brand-logo auth-logo" />
             <h1 className="h1">Join StringGlobe with secure account access.</h1>
-            <p className="p">Create a player or stringer account with your email and password, then enter a beautifully designed portal built for pro-shop service.</p>
-            <div className="stats premium-stats">
-              <div className="stat light-stat"><span className="small">Players</span><strong>Bag tracking</strong></div>
-              <div className="stat light-stat"><span className="small">Stringers</span><strong>Queue + payouts</strong></div>
-              <div className="stat light-stat"><span className="small">Access</span><strong>Email + password</strong></div>
-            </div>
+            <p className="p">Create a player or stringer account with clean profile details, business identity, and a backend join timestamp for future lifecycle tracking.</p>
           </div>
         </section>
 
@@ -88,11 +87,9 @@ export default function AuthPageClient() {
           <div className="role-picker">
             <button type="button" className={`role-option light-option ${mode === 'signup' ? 'active' : ''}`} onClick={() => setMode('signup')}>
               <strong>Create account</strong>
-              <div className="small">New to the platform</div>
             </button>
             <button type="button" className={`role-option light-option ${mode === 'signin' ? 'active' : ''}`} onClick={() => setMode('signin')}>
               <strong>Sign in</strong>
-              <div className="small">Return to your account</div>
             </button>
           </div>
 
@@ -101,21 +98,36 @@ export default function AuthPageClient() {
             <div className="role-picker">
               <button type="button" className={`role-option light-option ${role === 'PLAYER' ? 'active' : ''}`} onClick={() => setRole('PLAYER')}>
                 <strong>Player</strong>
-                <div className="small">Bag, racquets, and payment</div>
+                <div className="small">Owns racquet history</div>
               </button>
               <button type="button" className={`role-option light-option ${role === 'STRINGER' ? 'active' : ''}`} onClick={() => setRole('STRINGER')}>
                 <strong>Stringer</strong>
-                <div className="small">Queue, drop-offs, and payouts</div>
+                <div className="small">Owns workflow</div>
               </button>
             </div>
           </div>
 
           <form className="grid" onSubmit={handleSubmit}>
             {mode === 'signup' ? (
-              <div>
-                <label className="label">Full name</label>
-                <input className="input input-light" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your full name" />
-              </div>
+              <>
+                <div className="meta-grid">
+                  <div>
+                    <label className="label">First name</label>
+                    <input className="input input-light" value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="First name" />
+                  </div>
+                  <div>
+                    <label className="label">Last name</label>
+                    <input className="input input-light" value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Last name" />
+                  </div>
+                </div>
+                {role === 'STRINGER' ? (
+                  <div>
+                    <label className="label">Business name</label>
+                    <input className="input input-light" value={businessName} onChange={(e) => setBusinessName(e.target.value)} placeholder="Ace Tennis Studio" />
+                    <div className="small">You can use your personal name if that is how players know you.</div>
+                  </div>
+                ) : null}
+              </>
             ) : null}
 
             <div>
