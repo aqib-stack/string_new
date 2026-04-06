@@ -87,6 +87,13 @@ export type Job = {
   picked_up_at?: string;
   proof_photo_url?: string;
   inspection_note?: string;
+  racquet_name?: string;
+  racquet_model?: string;
+  preferred_shop_name?: string;
+  string_type?: string;
+  tension?: string;
+  is_hybrid?: boolean;
+  hybrid_setup?: HybridSetup;
   labor_cost?: number;
   string_cost?: number;
   customer_provided_string?: boolean;

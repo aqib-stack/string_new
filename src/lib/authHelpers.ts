@@ -4,8 +4,10 @@ import { auth, db } from './firebase';
 import type { AppUser, UserRole } from '@/types';
 import {
   createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut,
+  verifyBeforeUpdateEmail,
 } from 'firebase/auth';
 import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { DEFAULT_LABOR_RATE } from './appConstants';
@@ -178,4 +180,25 @@ export async function logoutUser() {
 
 export function getSessionUser(): AppUser | null {
   return null;
+}
+
+export async function requestPasswordReset(email: string) {
+  const safeEmail = email.trim().toLowerCase();
+  if (!safeEmail) throw new Error('Enter an email address first.');
+  await sendPasswordResetEmail(auth, safeEmail);
+}
+
+export async function requestEmailUpdate(newEmail: string) {
+  const safeEmail = newEmail.trim().toLowerCase();
+  if (!auth.currentUser) throw new Error('Please sign in again and try updating your email.');
+  if (!safeEmail) throw new Error('Enter a new email address first.');
+  await verifyBeforeUpdateEmail(auth.currentUser, safeEmail);
+  await setDoc(
+    doc(db, 'users', auth.currentUser.uid),
+    {
+      email: safeEmail,
+      updated_at_server: serverTimestamp(),
+    },
+    { merge: true }
+  );
 }

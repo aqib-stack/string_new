@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useCurrentUser } from '@/components/RoleGate';
+import { requestEmailUpdate, requestPasswordReset } from '@/lib/authHelpers';
 import { getShop, updateShop } from '@/lib/firestoreData';
 
 export default function StringerSettingsPage() {
@@ -11,6 +12,8 @@ export default function StringerSettingsPage() {
   const [city, setCity] = useState('');
   const [laborRate, setLaborRate] = useState('20');
   const [message, setMessage] = useState('');
+  const [accountMessage, setAccountMessage] = useState('');
+  const [email, setEmail] = useState('');
 
   useEffect(() => {
     if (!user?.shop_id) return;
@@ -21,6 +24,10 @@ export default function StringerSettingsPage() {
       setLaborRate(String(Number(shop?.labor_rate || 20)));
     })();
   }, [user]);
+
+  useEffect(() => {
+    setEmail(user?.email || '');
+  }, [user?.email]);
 
   if (loading) return <main className="container"><div className="card">Loading settings…</div></main>;
   if (!user || user.user_role !== 'STRINGER') return <main className="container"><div className="card grid"><h1 className="h2">Stringer settings</h1><p className="p">Sign in as a stringer to edit business settings.</p><Link className="btn" href="/auth?mode=signin&role=STRINGER">Sign in</Link></div></main>;
@@ -47,6 +54,19 @@ export default function StringerSettingsPage() {
           <Link className="btn secondary small-btn" href="/stringer">Back to dashboard</Link>
         </div>
       </section>
+      <section className="card grid strong" style={{ maxWidth: 760 }}>
+        <div className="section-heading"><span className="kicker">Account</span><h2 className="h2">Basic app settings</h2><p className="p">Change email and reset password from one place.</p></div>
+        {accountMessage ? <div className="notice success">{accountMessage}</div> : null}
+        <div>
+          <label className="label">Email address</label>
+          <input className="input" value={email} onChange={(e) => setEmail(e.target.value)} />
+        </div>
+        <div className="inline-actions">
+          <button className="btn small-btn" onClick={async () => { await requestEmailUpdate(email); setAccountMessage('Verification email sent. Confirm the email change from your inbox.'); }}>Update email</button>
+          <button className="btn secondary small-btn" onClick={async () => { await requestPasswordReset(user.email || email); setAccountMessage('Password reset email sent.'); }}>Send password reset</button>
+        </div>
+      </section>
+
     </main>
   );
 }

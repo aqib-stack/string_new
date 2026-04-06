@@ -2,7 +2,7 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { History, LogOut, ScanLine, WalletCards } from 'lucide-react';
+import { History, LogOut, ScanLine, Settings, WalletCards } from 'lucide-react';
 import { useCurrentUser } from '@/components/RoleGate';
 import { StatusPill } from '@/components/StatusPill';
 import { ReadinessBar } from '@/components/ReadinessBar';
@@ -22,7 +22,8 @@ import {
   savePlayerFeedback,
   sendPickupReminderIfNeeded,
 } from '@/lib/firestoreData';
-import { formatLastStringDate, getRacquetHealth } from '@/lib/health';
+import { formatLastStringDate } from '@/lib/health';
+import { StringSetupSummary } from '@/components/StringSetupSummary';
 import { useEffect, useMemo, useState } from 'react';
 
 function getTimeValue(value: any): number {
@@ -39,11 +40,20 @@ function formatTimeline(value: any) {
   return new Date(time).toLocaleDateString();
 }
 
-function racquetSetupLabel(racquet: any) {
-  if (racquet?.is_hybrid && racquet?.hybrid_setup) {
-    return `${racquet.hybrid_setup.mains_string || 'Mains'} / ${racquet.hybrid_setup.crosses_string || 'Crosses'}`;
+function getReadiness(racquet: any, jobs: any[]) {
+  const activeJob = jobs.find((job) => job.racquet_id === racquet.racquet_id && !['PICKED_UP', 'CANCELLED'].includes(job.status));
+  if (activeJob) {
+    return { percent: 100, statusLabel: activeJob.status === 'PAID' ? 'Awaiting pickup' : 'In service' };
   }
-  return racquet?.string_type || 'No service recorded yet';
+
+  if (!racquet?.last_string_date) {
+    return { percent: 0, statusLabel: 'No service recorded' };
+  }
+
+  const daysSince = Math.floor((Date.now() - new Date(racquet.last_string_date).getTime()) / (1000 * 60 * 60 * 24));
+  if (daysSince <= 30) return { percent: 100, statusLabel: 'Ready' };
+  if (daysSince <= 45) return { percent: 55, statusLabel: 'Due soon' };
+  return { percent: 20, statusLabel: 'Needs restringing' };
 }
 
 export default function PlayerDashboard() {
@@ -124,6 +134,13 @@ export default function PlayerDashboard() {
         status: 'REQUESTED',
         request_source: 'PLAYER_PORTAL',
         requested_at: new Date().toISOString(),
+        racquet_name: racquet.racquet_name || '',
+        racquet_model: racquet.racquet_model || '',
+        preferred_shop_name: racquet.preferred_shop_name || '',
+        string_type: racquet.string_type || '',
+        tension: racquet.tension || '',
+        is_hybrid: Boolean(racquet.is_hybrid),
+        hybrid_setup: racquet.hybrid_setup || undefined,
       });
 
       await addAlert({
@@ -152,14 +169,15 @@ export default function PlayerDashboard() {
   }
 
   const activeJobs = useMemo(() => jobs.filter((job) => !['PICKED_UP', 'CANCELLED'].includes(job.status)), [jobs]);
-  const actionableJobs = useMemo(() => jobs.filter((job) => ['REQUESTED', 'RECEIVED', 'AWAITING_PLAYER'].includes(job.status)), [jobs]);
   const historyJobs = useMemo(() => jobs.filter((job) => ['PICKED_UP', 'CANCELLED'].includes(job.status)), [jobs]);
-  const readyCount = useMemo(() => racquets.filter((racquet) => ['Fresh', 'Optimal'].includes(getRacquetHealth(racquet.last_string_date).statusLabel)).length, [racquets]);
-  const needsServiceCount = Math.max(0, racquets.length - readyCount);
-  const requestedReceivedCount = jobs.filter((job) => ['REQUESTED', 'RECEIVED'].includes(job.status)).length;
-  const awaitingResponseCount = jobs.filter((job) => job.status === 'AWAITING_PLAYER').length;
-  const awaitingPickupCount = jobs.filter((job) => job.status === 'PAID').length;
-  const attentionCount = requestedReceivedCount + awaitingResponseCount;
+  const readyForPaymentCount = useMemo(() => jobs.filter((job) => Boolean(job.payment_requested_at) && job.status === 'FINISHED').length, [jobs]);
+  const requestedReceivedCount = useMemo(() => jobs.filter((job) => ['REQUESTED', 'RECEIVED'].includes(job.status)).length, [jobs]);
+  const awaitingResponseCount = useMemo(() => jobs.filter((job) => job.status === 'AWAITING_PLAYER').length, [jobs]);
+  const awaitingPickupCount = useMemo(() => jobs.filter((job) => job.status === 'PAID').length, [jobs]);
+  const readinessStats = useMemo(() => {
+    const ready = racquets.filter((racquet) => getReadiness(racquet, jobs).statusLabel === 'Ready').length;
+    return { ready, needsService: Math.max(0, racquets.length - ready) };
+  }, [racquets, jobs]);
 
   if (loading) return <main className="container"><div className="card">Loading your bag…</div></main>;
   if (!user) return <main className="container"><div className="card grid"><h1 className="h2">Player access</h1><p className="p">Sign in to see your racquets, request string jobs, and complete pickup payments.</p><Link className="btn" href="/auth?mode=signin&role=PLAYER">Sign in as player</Link></div></main>;
@@ -177,7 +195,10 @@ export default function PlayerDashboard() {
                 <strong>{user.name}</strong>
               </div>
             </div>
-            <button className="btn secondary small-btn" onClick={handleLogout}><LogOut size={16} /> Sign out</button>
+            <div className="inline-actions">
+              <Link className="btn secondary small-btn" href="/player/settings"><Settings size={16} /> Settings</Link>
+              <button className="btn secondary small-btn" onClick={handleLogout}><LogOut size={16} /> Sign out</button>
+            </div>
           </div>
 
           <div className="hero-copy-stack">
@@ -199,13 +220,13 @@ export default function PlayerDashboard() {
             </div>
             <div className="summary-card glass-card">
               <span className="small">Match readiness</span>
-              <strong>{readyCount} racquets ready • {needsServiceCount} need restringing</strong>
-              <span className="summary-meta">A quick high-level status check</span>
+              <strong>{readinessStats.ready} racquets ready • {readinessStats.needsService} need restringing</strong>
+              <span className="summary-meta">Based on last completed string date</span>
             </div>
             <div className="summary-card glass-card">
               <span className="small">Active jobs</span>
-              <strong>{actionableJobs.length}</strong>
-              <span className="summary-meta">Jobs needing attention now</span>
+              <strong>{activeJobs.length}</strong>
+              <span className="summary-meta">Live jobs across your racquets</span>
             </div>
           </div>
         </div>
@@ -226,9 +247,10 @@ export default function PlayerDashboard() {
 
           <div className="list racquet-list-premium">
             {racquets.map((racquet) => {
-              const health = getRacquetHealth(racquet.last_string_date);
+              const readiness = getReadiness(racquet, jobs);
               const latestJobForRacquet = jobs.find((job) => job.racquet_id === racquet.racquet_id) || null;
               const hasOpenJob = Boolean(latestJobForRacquet && !['PICKED_UP', 'CANCELLED'].includes(latestJobForRacquet.status));
+              const showPayNow = latestJobForRacquet?.status === 'FINISHED' && latestJobForRacquet?.payment_requested_at;
 
               return (
                 <div key={racquet.racquet_id} className="card premium-link-card">
@@ -244,22 +266,23 @@ export default function PlayerDashboard() {
                           <div className="small">GlobeTag {racquet.tag_id}</div>
                         </div>
                         <div className="row wrap racquet-pill-row">
-                          {latestJobForRacquet ? <StatusPill status={latestJobForRacquet.status} /> : <span className="small">Ready to play</span>}
+                          {latestJobForRacquet ? <StatusPill status={latestJobForRacquet.status} paymentRequested={Boolean(latestJobForRacquet.payment_requested_at)} /> : <span className="small">Ready to play</span>}
                         </div>
                       </div>
 
-                      <ReadinessBar percent={health.percent} label={health.statusLabel} />
+                      <ReadinessBar percent={readiness.percent} label={readiness.statusLabel} />
 
                       <div className="meta-grid">
-                        <div className="meta-item"><strong>String setup</strong>{racquetSetupLabel(racquet)}</div>
-                        <div className="meta-item"><strong>Tension</strong>{racquet.is_hybrid ? 'Hybrid setup' : (racquet.tension || 'No service recorded yet')}</div>
-                        <div className="meta-item"><strong>Current Stringer</strong>{racquet.preferred_shop_name || 'No service recorded yet'}</div>
+                        <StringSetupSummary data={racquet} />
+                        <div className="meta-item"><strong>Current stringer</strong>{racquet.preferred_shop_name || 'No service recorded yet'}</div>
                         <div className="meta-item"><strong>Last string date</strong>{formatLastStringDate(racquet.last_string_date)}</div>
                       </div>
 
                       <div className="inline-actions">
                         <Link className="btn secondary small-btn" href={`/player/racquet/${racquet.racquet_id}`}>View Details</Link>
-                        {hasOpenJob ? (
+                        {showPayNow ? (
+                          <Link className="btn small-btn" href={`/player/payment/${latestJobForRacquet.job_id}`}><WalletCards size={16} /> Pay now</Link>
+                        ) : hasOpenJob ? (
                           <Link className="btn small-btn" href={`/player/racquet/${racquet.racquet_id}`}>View Job</Link>
                         ) : (
                           <button className="btn small-btn" onClick={() => requestFromBag(racquet)} disabled={requestingRacquetId === racquet.racquet_id}>
@@ -279,12 +302,13 @@ export default function PlayerDashboard() {
         <div className="card col-4 grid strong section-card side-stack-card">
           <div className="section-heading">
             <span className="kicker">Current timeline</span>
-            <h2 className="h2">Jobs needing attention</h2>
-            <p className="p section-subtle">{attentionCount} {attentionCount === 1 ? 'job needs' : 'jobs need'} attention today.</p>
+            <h2 className="h2">At a glance</h2>
+            <p className="p section-subtle">Clear player actions only.</p>
           </div>
+          <div className="stat"><span className="small">Ready for payment</span><strong>{readyForPaymentCount}</strong></div>
           <div className="stat"><span className="small">Requested / Received</span><strong>{requestedReceivedCount}</strong></div>
-          <div className="stat"><span className="small">Awaiting your response</span><strong>{awaitingResponseCount}</strong></div>
-          <div className="stat"><span className="small">Awaiting pickup</span><strong>{awaitingPickupCount}</strong></div>
+          <div className="stat"><span className="small">Flagged / Awaiting Your Response</span><strong>{awaitingResponseCount}</strong></div>
+          <div className="stat"><span className="small">Awaiting Pickup</span><strong>{awaitingPickupCount}</strong></div>
         </div>
       </section>
 
@@ -292,7 +316,7 @@ export default function PlayerDashboard() {
         <div className="topbar"><div className="section-heading"><span className="kicker">Active orders</span><h2 className="h2">Current jobs</h2></div></div>
         <div className="list premium-job-list">
           {activeJobs.map((job) => {
-            const racquet = racquets.find((item) => item.racquet_id === job.racquet_id);
+            const racquet = racquets.find((item) => item.racquet_id === job.racquet_id) || job;
             const showReminder = job.status === 'PAID' && !job.pickup_confirmed && Date.now() - getTimeValue(job.paid_at || job.updated_at || job.created_at) >= 2 * 24 * 60 * 60 * 1000;
             const canCancel = ['REQUESTED', 'RECEIVED', 'AWAITING_PLAYER'].includes(job.status);
             return (
@@ -301,26 +325,25 @@ export default function PlayerDashboard() {
                   <div>
                     <div className="small">Job {formatJobCode(job.job_id)}</div>
                     <h3 className="h3">{racquet?.racquet_name || racquet?.tag_id || 'Racquet'}</h3>
-                    <div className="small">{racquetSetupLabel(racquet)} • {racquet?.is_hybrid ? 'Hybrid' : (racquet?.tension || '—')}</div>
+                    <div className="small">{job.string_type || racquet?.string_type || 'String not recorded'} • {job.is_hybrid ? 'Hybrid setup' : (job.tension || racquet?.tension || '—')}</div>
                   </div>
-                  <StatusPill status={job.status} />
+                  <StatusPill status={job.status} paymentRequested={Boolean(job.payment_requested_at)} />
                 </div>
 
-                <JobProgressLine status={job.status} />
+                <JobProgressLine status={job.status} playerView />
                 {job.flagged_issues?.length ? <div className="notice warn">Issue found: {job.flagged_issues.join(', ')}. This job is paused until you approve or cancel it.</div> : null}
                 {job.inspection_note ? <div className="notice warn">Stringer note: {job.inspection_note}</div> : null}
                 {showReminder ? <div className="notice warn">Reminder: your racquet has been waiting for pickup for 2+ days.</div> : null}
 
                 <div className="meta-grid">
+                  <StringSetupSummary data={job.is_hybrid ? job : racquet} compact />
                   <div className="meta-item"><strong>Date requested</strong>{formatTimeline(job.requested_at || job.created_at)}</div>
-                  <div className="meta-item"><strong>Drop-off</strong>{formatTimeline(job.dropped_off_at)}</div>
-                  <div className="meta-item"><strong>Ready</strong>{job.finished_at ? formatTimeline(job.finished_at) : 'Not ready yet'}</div>
-                  <div className="meta-item"><strong>Current Stringer</strong>{racquet?.preferred_shop_name || '—'}</div>
+                  <div className="meta-item"><strong>Current Stringer</strong>{job.preferred_shop_name || racquet?.preferred_shop_name || '—'}</div>
                 </div>
 
                 <div className="inline-actions">
                   <Link className="btn secondary small-btn" href={`/player/racquet/${job.racquet_id}`}>View Job</Link>
-                  {job.status === 'FINISHED' ? <Link className="btn small-btn" href={`/player/payment/${job.job_id}`}><WalletCards size={16} /> Pay now</Link> : null}
+                  {job.status === 'FINISHED' && job.payment_requested_at ? <Link className="btn small-btn" href={`/player/payment/${job.job_id}`}><WalletCards size={16} /> Pay now</Link> : null}
                   {job.status === 'PAID' && !job.pickup_confirmed ? <button className="btn small-btn" onClick={() => confirmPickup(job)}>Confirm pickup</button> : null}
                   {job.status === 'AWAITING_PLAYER' ? <button className="btn small-btn" onClick={async () => { await approveFlaggedJob(job.job_id); setNotice('Approved. The stringer can now continue.'); await refreshData(user); }}>Approve & continue</button> : null}
                   {canCancel ? <button className="btn secondary small-btn" onClick={async () => { await cancelJob(job.job_id, 'PLAYER', 'Cancelled by player'); setNotice('Job cancelled.'); await refreshData(user); }}>Cancel job</button> : null}
@@ -328,7 +351,12 @@ export default function PlayerDashboard() {
               </div>
             );
           })}
-          {activeJobs.length === 0 ? <div className="small">No active jobs right now.</div> : null}
+          {activeJobs.length === 0 ? (
+            <div className="grid" style={{ gap: 12 }}>
+              <div className="small">No active jobs yet. Request a restring to get started.</div>
+              <div className="inline-actions"><Link className="btn small-btn" href="/onboarding">Request restring</Link></div>
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -336,18 +364,19 @@ export default function PlayerDashboard() {
         <div className="topbar"><div className="section-heading"><span className="kicker">My Racquet History</span><h2 className="h2">Timeline of past string jobs</h2></div></div>
         <div className="list premium-job-list">
           {historyJobs.map((job) => {
-            const racquet = racquets.find((item) => item.racquet_id === job.racquet_id);
+            const racquet = racquets.find((item) => item.racquet_id === job.racquet_id) || job;
             return (
               <div className="card premium-job-card" key={job.job_id}>
                 <div className="row between wrap">
                   <div>
                     <div className="small">{formatTimeline(job.picked_up_at || job.cancelled_at || job.updated_at || job.created_at)}</div>
                     <h3 className="h3">{racquet?.racquet_name || racquet?.tag_id || 'Racquet'}</h3>
-                    <div className="small">{racquetSetupLabel(racquet)} • {racquet?.is_hybrid ? 'Hybrid setup' : (racquet?.tension || '—')} • {racquet?.preferred_shop_name || 'Stringer not recorded'}</div>
+                    <div className="small">{job.preferred_shop_name || racquet?.preferred_shop_name || 'Stringer not recorded'}</div>
                   </div>
-                  <StatusPill status={job.status} />
+                  <StatusPill status={job.status} paymentRequested={Boolean(job.payment_requested_at)} />
                 </div>
-                <JobProgressLine status={job.status === 'CANCELLED' ? 'REQUESTED' : job.status} />
+                <JobProgressLine status={job.status === 'CANCELLED' ? 'REQUESTED' : job.status} playerView />
+                <div className="meta-grid"><StringSetupSummary data={job.is_hybrid ? job : racquet} compact /></div>
                 {job.status === 'PICKED_UP' && !job.player_feedback ? (
                   <div className="inline-actions">
                     <span className="small">How did it feel?</span>

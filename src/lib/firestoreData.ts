@@ -546,6 +546,30 @@ export async function saveInspection(jobId: string, inspection: AnyRecord = {}) 
   });
 }
 
+
+export async function markJobFinished(jobId: string) {
+  const job = await getJob(jobId);
+  if (!job) return;
+
+  await updateJob(jobId, {
+    status: 'FINISHED',
+    finished_at: nowIso(),
+  });
+
+  if (job.racquet_id) {
+    const racquet = await getRacquetById(job.racquet_id);
+    if (racquet) {
+      await updateRacquet(job.racquet_id, {
+        last_string_date: nowIso(),
+        string_type: job.string_type || racquet.string_type,
+        tension: job.tension || racquet.tension,
+        is_hybrid: Boolean(job.is_hybrid || racquet.is_hybrid),
+        hybrid_setup: job.hybrid_setup || racquet.hybrid_setup || undefined,
+      });
+    }
+  }
+}
+
 export async function markJobPaid(jobId: string) {
   const job = await getJob(jobId);
   if (!job) return;
@@ -605,11 +629,9 @@ export async function markJobPickedUp(jobId: string) {
 
   if (job.racquet_id) {
     const racquet = await getRacquetById(job.racquet_id);
-
     if (racquet) {
       await updateRacquet(job.racquet_id, {
         restring_count: Number(racquet.restring_count || 0) + 1,
-        last_string_date: nowIso(),
       });
     }
   }
