@@ -96,7 +96,7 @@ export default function PaymentPage({ params }: { params: Promise<{ jobId: strin
 
         <div className="card col-7 grid strong section-card section-card-large">
           <span className="kicker">Payment sheet</span>
-          <h2 className="h2">Secure checkout</h2>
+          <h2 className="h2">Pay now</h2>
           {alreadyPaid ? (
             <div className="notice success">Payment was already completed for this job. Your racquet is ready for pickup.</div>
           ) : clientSecret ? (
@@ -108,7 +108,7 @@ export default function PaymentPage({ params }: { params: Promise<{ jobId: strin
           ) : (
             <div className="grid payment-fallback-grid">
               <div className="notice">Live Stripe keys are not connected in this environment yet, so you can complete the sandbox payment below.</div>
-              <button className="btn" onClick={completeSandboxPayment}>Complete sandbox payment for {formatMoney(jobTotal)}</button>
+              <button className="btn" onClick={completeSandboxPayment}>Pay now {formatMoney(jobTotal)}</button>
             </div>
           )}
         </div>

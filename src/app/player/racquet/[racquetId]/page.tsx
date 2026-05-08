@@ -8,13 +8,14 @@ import { useCurrentUser } from '@/components/RoleGate';
 import { StatusPill } from '@/components/StatusPill';
 import { ReadinessBar } from '@/components/ReadinessBar';
 import { JobProgressLine } from '@/components/JobProgressLine';
-import { StringSetupSummary } from '@/components/StringSetupSummary';
-import { addAlert, cancelJob, createJob, formatJobCode, getLatestJobForRacquet, getOpenJobForRacquet, getRacquetById, listShops, markJobPickedUp, updateRacquet } from '@/lib/firestoreData';
+import { StringSetupSummary, getStringSetupSummary } from '@/components/StringSetupSummary';
+import { addAlert, approveFlaggedJob, cancelJob, createJob, formatJobCode, getLatestJobForRacquet, getOpenJobForRacquet, getRacquetById, listJobsByRacquet, listShops, markJobPickedUp, updateRacquet } from '@/lib/firestoreData';
 import { formatLastStringDate, getRacquetHealth } from '@/lib/health';
 import { SHARED_SHOP_ID } from '@/lib/appConstants';
 
 const STRING_TYPES = ['Poly Tour Pro', 'RPM Blast', 'ALU Power', 'Synthetic Gut', 'Natural Gut'];
-const TENSION_OPTIONS = ['45 lbs', '48 lbs', '50 lbs', '52 lbs', '54 lbs', '56 lbs', '58 lbs', '60 lbs'];
+const TENSION_OPTIONS = Array.from({ length: 41 }, (_, index) => String(30 + index) + " lbs");
+function tensionNumber(value: string) { return String(value || '52').replace(/[^0-9]/g, '') || '52'; }
 
 export default function PlayerRacquetDetailPage({ params }: { params: Promise<{ racquetId: string }> }) {
   const router = useRouter();
@@ -38,18 +39,20 @@ export default function PlayerRacquetDetailPage({ params }: { params: Promise<{ 
   const [message, setMessage] = useState('');
   const [latestJob, setLatestJob] = useState<any | null>(null);
   const [openJob, setOpenJob] = useState<any | null>(null);
+  const [historyJobs, setHistoryJobs] = useState<any[]>([]);
 
   async function refresh(id = racquetId) {
     if (!id) return;
     const [nextRacquet, nextShops] = await Promise.all([getRacquetById(id), listShops()]);
     setRacquet(nextRacquet); setShops(nextShops); setRacquetName(nextRacquet?.racquet_name || ''); setRacquetModel(nextRacquet?.racquet_model || ''); setStringType(nextRacquet?.string_type || 'Poly Tour Pro'); setTension(nextRacquet?.tension || '52 lbs'); setPreferredShopId(nextRacquet?.preferred_shop_id || SHARED_SHOP_ID); setUseHybrid(Boolean(nextRacquet?.is_hybrid)); setMainsString(nextRacquet?.hybrid_setup?.mains_string || ''); setMainsTension(nextRacquet?.hybrid_setup?.mains_tension || '52 lbs'); setCrossesString(nextRacquet?.hybrid_setup?.crosses_string || ''); setCrossesTension(nextRacquet?.hybrid_setup?.crosses_tension || '52 lbs');
-    if (nextRacquet?.racquet_id) { setLatestJob(await getLatestJobForRacquet(nextRacquet.racquet_id)); setOpenJob(await getOpenJobForRacquet(nextRacquet.racquet_id)); }
+    if (nextRacquet?.racquet_id) { setLatestJob(await getLatestJobForRacquet(nextRacquet.racquet_id)); setOpenJob(await getOpenJobForRacquet(nextRacquet.racquet_id)); setHistoryJobs((await listJobsByRacquet(nextRacquet.racquet_id)).filter((job) => ['PICKED_UP', 'CANCELLED'].includes(job.status)).slice(0, 8)); }
   }
 
   useEffect(() => { params.then(({ racquetId }) => { setRacquetId(racquetId); void refresh(racquetId); }); }, [params]);
   useEffect(() => { if (!racquetId) return; const timer = window.setInterval(() => void refresh(), 2500); return () => window.clearInterval(timer); }, [racquetId]);
 
-  const health = getRacquetHealth(racquet?.last_string_date);
+  const baseHealth = getRacquetHealth(racquet?.last_string_date);
+  const health = openJob ? { percent: openJob.status === 'PAID' ? 95 : openJob.status === 'FINISHED' ? 80 : 55, statusLabel: openJob.status === 'PAID' ? 'Awaiting pickup' : openJob.status === 'FINISHED' ? 'Awaiting payment' : 'In service', tone: 'warn' } : baseHealth;
   const preferredShop = shops.find((shop) => shop.shop_id === preferredShopId) || shops[0] || null;
 
   async function saveSetup() {
@@ -57,6 +60,25 @@ export default function PlayerRacquetDetailPage({ params }: { params: Promise<{ 
     setSaving(true);
     await updateRacquet(racquet.racquet_id, { racquet_name: racquetName, racquet_model: racquetModel, string_type: useHybrid ? 'Hybrid setup' : stringType, tension: useHybrid ? 'Hybrid setup' : tension, is_hybrid: useHybrid, hybrid_setup: useHybrid ? { mains_string: mainsString, mains_tension: mainsTension, crosses_string: crossesString, crosses_tension: crossesTension } : undefined, preferred_shop_id: preferredShop?.shop_id || SHARED_SHOP_ID, preferred_shop_name: preferredShop?.name || 'Preferred shop' } as any);
     setEditing(false); setMessage('Racquet setup updated successfully.'); await refresh(); setSaving(false);
+  }
+
+  async function repeatLastJob() {
+    if (!racquet?.racquet_id) return;
+    const allJobs = await listJobsByRacquet(racquet.racquet_id);
+    const last = allJobs.find((job) => ['PICKED_UP', 'PAID', 'FINISHED'].includes(job.status) && (job.is_hybrid || job.string_type || job.tension));
+    if (!last) return setMessage('No completed setup found to repeat yet.');
+    setUseHybrid(Boolean(last.is_hybrid));
+    if (last.is_hybrid) {
+      setMainsString(last.hybrid_setup?.mains_string || '');
+      setMainsTension(last.hybrid_setup?.mains_tension || '52 lbs');
+      setCrossesString(last.hybrid_setup?.crosses_string || '');
+      setCrossesTension(last.hybrid_setup?.crosses_tension || '52 lbs');
+    } else {
+      setStringType(last.string_type || stringType);
+      setTension(last.tension || tension);
+    }
+    setEditing(true);
+    setMessage('Last completed setup loaded as an autofill. Review it, then save or request service.');
   }
 
   async function requestStringJob() {
@@ -72,11 +94,29 @@ export default function PlayerRacquetDetailPage({ params }: { params: Promise<{ 
 
   async function confirmPickup() { if (!latestJob) return; await markJobPickedUp(latestJob.job_id); setMessage(`Pickup confirmed for ${formatJobCode(latestJob.job_id)}.`); await refresh(); }
 
+  async function approveIssue() {
+    if (!latestJob) return;
+    await approveFlaggedJob(latestJob.job_id);
+    setMessage('Approved. The stringer can continue without re-inspecting.');
+    await refresh();
+  }
+
+  async function cancelLatestJob() {
+    if (!latestJob) return;
+    const reason = window.prompt('Optional cancellation reason', 'Cancelled by player') || 'Cancelled by player';
+    await cancelJob(latestJob.job_id, 'PLAYER', reason);
+    setMessage('Job cancelled and the stringer has been notified.');
+    await refresh();
+  }
+
   const primaryAction = useMemo(() => {
+    if (openJob) return { type: 'button' as const, label: 'Job already in progress', disabled: true };
     if (!latestJob || ['PICKED_UP', 'CANCELLED'].includes(latestJob.status)) return { type: 'button' as const, label: 'Request string job', disabled: false };
     if (latestJob.status === 'FINISHED' && latestJob.payment_requested_at) return { type: 'link' as const, label: 'Pay now', href: `/player/payment/${latestJob.job_id}` };
     return { type: 'button' as const, label: 'View active job', disabled: true };
-  }, [latestJob]);
+  }, [latestJob, openJob]);
+
+  const currentSummary = getStringSetupSummary(racquet || {});
 
   if (loading) return <main className="container"><div className="card">Loading racquet…</div></main>;
   if (!user) return <main className="container"><div className="card grid"><h1 className="h2">Player access</h1><p className="p">Sign in to manage racquet setup, health, and string jobs.</p><Link className="btn" href={`/auth?mode=signin&role=PLAYER&next=${encodeURIComponent(`/player/racquet/${racquetId}`)}`}>Sign in</Link></div></main>;
@@ -89,15 +129,23 @@ export default function PlayerRacquetDetailPage({ params }: { params: Promise<{ 
         <div className="card col-7 grid strong">
           <div className="racquet-card"><div className="racquet-thumb"><Image src="/racquet-card.svg" alt="Racquet illustration" width={96} height={96} /></div><div className="grid"><div className="row between wrap"><div><span className="kicker">Racquet in bag</span><h1 className="h2">{racquet.racquet_name || racquet.tag_id}</h1><div className="small">{racquet.racquet_model || 'Model not added yet'} • GlobeTag {racquet.tag_id}</div></div>{latestJob && !['PICKED_UP', 'CANCELLED'].includes(latestJob.status) ? <StatusPill status={latestJob.status} paymentRequested={Boolean(latestJob.payment_requested_at)} /> : <span className="small">Ready to play</span>}</div><ReadinessBar percent={health.percent} label={health.statusLabel} /></div></div>
           {message ? <div className="notice success">{message}</div> : null}
-          <div className="meta-grid"><div className="meta-item"><strong>Current Stringer</strong>{racquet.preferred_shop_name || 'No service recorded yet'}</div><div className="meta-item"><strong>Restring count</strong>{racquet.restring_count || 0}</div><div className="meta-item"><strong>Last string date</strong>{formatLastStringDate(racquet.last_string_date)}</div><div className="meta-item"><strong>Setup</strong>{racquet.is_hybrid ? `${racquet.hybrid_setup?.mains_string || 'Mains'} / ${racquet.hybrid_setup?.crosses_string || 'Crosses'}` : racquet.string_type}</div></div>
+          <div className="meta-grid"><div className="meta-item"><strong>Current Stringer</strong>{racquet.preferred_shop_name || 'No service recorded yet'}</div><div className="meta-item"><strong>Restring count</strong>{racquet.restring_count || 0}</div><div className="meta-item"><strong>Last string date</strong>{formatLastStringDate(racquet.last_string_date)}</div><div className="meta-item"><strong>Main / Cross</strong>{currentSummary.setupLabel}</div><div className="meta-item"><strong>Tension</strong>{currentSummary.tensionLabel}</div></div>
         </div>
-        <div className="card col-5 grid"><span className="kicker">Current service</span><div className="row between wrap"><h2 className="h2">String job status</h2>{latestJob && !['PICKED_UP', 'CANCELLED'].includes(latestJob.status) ? <StatusPill status={latestJob.status} paymentRequested={Boolean(latestJob.payment_requested_at)} /> : <span className="small">No job in progress</span>}</div>{latestJob ? <div className="small">Latest job: {formatJobCode(latestJob.job_id)}</div> : <div className="small">This racquet is ready whenever you need service.</div>}{latestJob ? <JobProgressLine status={latestJob.status} playerView /> : null}{latestJob?.inspection_note ? <div className="notice warn">Stringer note: {latestJob.inspection_note}</div> : null}<div className="inline-actions">{primaryAction.type === 'link' ? <Link className="btn small-btn" href={primaryAction.href}>{primaryAction.label}</Link> : <button className="btn small-btn" onClick={requestStringJob} disabled={primaryAction.disabled}>{primaryAction.label}</button>}{latestJob?.status === 'PAID' && !latestJob?.pickup_confirmed ? <button className="btn small-btn" onClick={confirmPickup}>Confirm pickup</button> : null}{['REQUESTED', 'RECEIVED', 'AWAITING_PLAYER'].includes(latestJob?.status) ? <button className="btn secondary small-btn" onClick={async () => { await cancelJob(latestJob.job_id, 'PLAYER', 'Cancelled by player'); setMessage('Job cancelled.'); await refresh(); }}>Cancel job</button> : null}<button className="btn secondary small-btn" onClick={() => router.push('/player')}>Back to portal</button></div></div>
+        <div className="card col-5 grid"><span className="kicker">Current service</span><div className="row between wrap"><h2 className="h2">String job status</h2>{latestJob && !['PICKED_UP', 'CANCELLED'].includes(latestJob.status) ? <StatusPill status={latestJob.status} paymentRequested={Boolean(latestJob.payment_requested_at)} /> : <span className="small">No job in progress</span>}</div>{latestJob ? <div className="small">Latest job: {formatJobCode(latestJob.job_id)}</div> : <div className="small">This racquet is ready whenever you need service.</div>}{latestJob ? <JobProgressLine status={latestJob.status} playerView /> : null}{latestJob?.inspection_note ? <div className="notice warn">Stringer note: {latestJob.inspection_note}</div> : null}{latestJob?.flagged_issues?.length ? <div className="notice warn">Issues: {latestJob.flagged_issues.join(', ')}. Please approve or cancel.</div> : null}{latestJob?.flagged_photo_urls?.length ? <div className="notice warn"><strong>Inspection photos</strong> {latestJob.flagged_photo_urls.join(', ')}</div> : null}{latestJob?.approved_to_continue ? <div className="notice success">Approved. Stringer can continue this job.</div> : null}{latestJob?.status === 'CANCELLED' ? <div className="notice warn">Cancelled by {String(latestJob.cancelled_by || 'system').toLowerCase()}{latestJob.cancel_reason ? `: ${latestJob.cancel_reason}` : ''}</div> : null}<div className="inline-actions">{primaryAction.type === 'link' ? <Link className="btn small-btn" href={primaryAction.href}>{primaryAction.label}</Link> : <button className="btn small-btn" onClick={requestStringJob} disabled={primaryAction.disabled}>{primaryAction.label}</button>}{latestJob?.status === 'PAID' && !latestJob?.pickup_confirmed ? <button className="btn small-btn" onClick={confirmPickup}>Confirm pickup</button> : null}{latestJob?.status === 'AWAITING_PLAYER' ? <button className="btn small-btn" onClick={approveIssue}>Approve & continue</button> : null}{['REQUESTED', 'RECEIVED', 'AWAITING_PLAYER'].includes(latestJob?.status) ? <button className="btn secondary small-btn" onClick={cancelLatestJob}>Cancel job</button> : null}<button className="btn secondary small-btn" onClick={() => router.push('/player')}>Back to portal</button></div></div>
       </section>
 
       <section className="card grid strong" style={{ maxWidth: 760 }}>
-        <div className="topbar"><div className="section-heading"><span className="kicker">String setup</span><h2 className="h2">Saved preferences</h2></div>{!editing ? <button className="btn secondary small-btn" onClick={() => setEditing(true)}>Edit setup</button> : null}</div>
-        {editing ? <div className="grid"><div><label className="label">Racquet name</label><input className="input" value={racquetName} onChange={(e) => setRacquetName(e.target.value)} /></div><div><label className="label">Racquet model</label><input className="input" value={racquetModel} onChange={(e) => setRacquetModel(e.target.value)} /></div>{!useHybrid ? <><div><label className="label">String</label><select className="input" value={stringType} onChange={(e) => setStringType(e.target.value)}>{STRING_TYPES.map((option) => <option key={option} value={option}>{option}</option>)}</select></div><div><label className="label">Tension</label><select className="input" value={tension} onChange={(e) => setTension(e.target.value)}>{TENSION_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div></> : null}<button type="button" className="btn secondary small-btn" onClick={() => setUseHybrid((v) => !v)}>{useHybrid ? 'Use single string setup' : 'Add hybrid setup'}</button>{useHybrid ? <div className="meta-grid"><div><label className="label">Mains string</label><input className="input" value={mainsString} onChange={(e) => setMainsString(e.target.value)} /></div><div><label className="label">Mains tension</label><select className="input" value={mainsTension} onChange={(e) => setMainsTension(e.target.value)}>{TENSION_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div><div><label className="label">Crosses string</label><input className="input" value={crossesString} onChange={(e) => setCrossesString(e.target.value)} /></div><div><label className="label">Crosses tension</label><select className="input" value={crossesTension} onChange={(e) => setCrossesTension(e.target.value)}>{TENSION_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select></div></div> : null}<div><label className="label">Current Stringer</label><select className="input" value={preferredShopId} onChange={(e) => setPreferredShopId(e.target.value)}>{shops.map((shop) => <option key={shop.shop_id} value={shop.shop_id}>{shop.name}{shop.city ? ` • ${shop.city}` : ''}</option>)}</select></div><div className="inline-actions"><button className="btn small-btn" onClick={() => void saveSetup()} disabled={saving}>{saving ? 'Saving…' : 'Save setup'}</button><button className="btn secondary small-btn" onClick={() => setEditing(false)}>Cancel</button></div></div> : <div className="meta-grid"><StringSetupSummary data={racquet} compact /><div className="meta-item"><strong>Current Stringer</strong>{racquet.preferred_shop_name || 'No service recorded yet'}</div><div className="meta-item"><strong>Proof photo</strong>{proofFile ? proofFile.name : 'Attach when requesting a job'}</div></div>}
+        <div className="topbar"><div className="section-heading"><span className="kicker">String setup</span><h2 className="h2">Saved preferences</h2></div><div className="inline-actions"><button className="btn secondary small-btn" onClick={() => void repeatLastJob()}>Repeat last job autofill</button>{!editing ? <button className="btn secondary small-btn" onClick={() => setEditing(true)}>Edit setup</button> : null}</div></div>
+        {editing ? <div className="grid"><div><label className="label">Racquet name</label><input className="input" value={racquetName} onChange={(e) => setRacquetName(e.target.value)} /></div><div><label className="label">Racquet model</label><input className="input" value={racquetModel} onChange={(e) => setRacquetModel(e.target.value)} /></div>{!useHybrid ? <><div><label className="label">String</label><select className="input" value={stringType} onChange={(e) => setStringType(e.target.value)}>{STRING_TYPES.map((option) => <option key={option} value={option}>{option}</option>)}</select></div><div><label className="label">Tension</label><input className="input" type="number" min="30" max="70" step="1" value={tensionNumber(tension)} onChange={(e) => setTension(`${e.target.value} lbs`)} /></div></> : null}<button type="button" className="btn secondary small-btn" onClick={() => setUseHybrid((v) => !v)}>{useHybrid ? 'Use single string setup' : 'Add hybrid setup'}</button>{useHybrid ? <div className="meta-grid"><div><label className="label">Mains string</label><input className="input" value={mainsString} onChange={(e) => setMainsString(e.target.value)} /></div><div><label className="label">Mains tension</label><input className="input" type="number" min="30" max="70" step="1" value={tensionNumber(mainsTension)} onChange={(e) => setMainsTension(`${e.target.value} lbs`)} /></div><div><label className="label">Crosses string</label><input className="input" value={crossesString} onChange={(e) => setCrossesString(e.target.value)} /></div><div><label className="label">Crosses tension</label><input className="input" type="number" min="30" max="70" step="1" value={tensionNumber(crossesTension)} onChange={(e) => setCrossesTension(`${e.target.value} lbs`)} /></div></div> : null}<div><label className="label">Current Stringer</label><select className="input" value={preferredShopId} onChange={(e) => setPreferredShopId(e.target.value)}>{shops.map((shop) => <option key={shop.shop_id} value={shop.shop_id}>{shop.name}{shop.city ? ` • ${shop.city}` : ''}</option>)}</select></div><div className="inline-actions"><button className="btn small-btn" onClick={() => void saveSetup()} disabled={saving}>{saving ? 'Saving…' : 'Save setup'}</button><button className="btn secondary small-btn" onClick={() => setEditing(false)}>Cancel</button></div></div> : <div className="meta-grid"><StringSetupSummary data={racquet} compact /><div className="meta-item"><strong>Current Stringer</strong>{racquet.preferred_shop_name || 'No service recorded yet'}</div><div className="meta-item"><strong>Proof photo</strong>{proofFile ? proofFile.name : 'Attach when requesting a job'}</div></div>}
         <div><label className="label">Proof of drop-off photo</label><input className="input" type="file" accept="image/*" onChange={(e) => setProofFile(e.target.files?.[0] || null)} /></div>
+      </section>
+
+      <section className="card grid strong" style={{ maxWidth: 980 }}>
+        <div className="section-heading"><span className="kicker">Racquet history</span><h2 className="h2">Past string jobs</h2><p className="p section-subtle">Visible after pickup too, so both the player and service team retain history.</p></div>
+        <div className="list premium-job-list">
+          {historyJobs.slice(0, 5).map((job) => <div className="card premium-job-card" key={job.job_id}><div className="row between wrap"><div><div className="small">Job {formatJobCode(job.job_id)}</div><h3 className="h3">{job.racquet_name || racquet.racquet_name || 'Racquet'}</h3><div className="small">{job.cancelled_at || job.picked_up_at || job.updated_at || job.created_at}</div></div><StatusPill status={job.status} paymentRequested={Boolean(job.payment_requested_at)} /></div><div className="meta-grid"><StringSetupSummary data={job.is_hybrid ? job : racquet} compact /><div className="meta-item"><strong>Cancel reason</strong>{job.cancel_reason || '—'}</div></div></div>)}
+          {historyJobs.length === 0 ? <div className="small">No completed or cancelled jobs yet.</div> : null}
+        </div>
       </section>
     </main>
   );

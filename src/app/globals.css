@@ -607,3 +607,83 @@ main { min-height: 100vh; }
 .premium-job-card .h3 + .small {
     margin-top: 5px;
 }
+.summary-subtitle {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #2563eb;
+}
+.revenue-card {
+  align-content: start;
+  gap: 10px;
+}
+.revenue-card .btn { margin-top: 4px; width: fit-content; }
+.revenue-insights-card,
+.issues-panel {
+  background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(241,247,255,0.9));
+}
+.glow-stat {
+  border-color: rgba(59,130,246,0.25);
+  box-shadow: inset 0 0 0 1px rgba(96,165,250,0.18), 0 14px 30px rgba(37,99,235,0.08);
+}
+.issue-count {
+  display: inline-flex;
+  min-width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: #fb923c;
+  color: white;
+  font-size: 0.9rem;
+  vertical-align: middle;
+}
+.issue-list { gap: 10px; }
+.issue-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(15,23,42,0.08);
+  background: rgba(15,23,42,0.04);
+}
+.issue-row div { display: grid; gap: 4px; }
+.issue-row span { color: var(--muted); font-size: .82rem; text-transform: uppercase; letter-spacing: .05em; }
+.scan-result-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(37,99,235,0.16);
+  background: rgba(239,246,255,0.85);
+  font-size: .9rem;
+}
+.scan-result-card span { color: var(--muted); }
+
+.scan-history-list {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.scan-history-item {
+  border: 1px solid rgba(88, 145, 255, 0.22);
+  border-radius: 14px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.68);
+  color: #516180;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.progress-step.active .progress-dot {
+  box-shadow: 0 0 0 4px rgba(88, 145, 255, 0.18);
+}
+
+.progress-step.active .progress-label {
+  color: #0d1d3b;
+  font-weight: 800;
+}

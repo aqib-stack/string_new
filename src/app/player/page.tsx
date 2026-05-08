@@ -43,7 +43,9 @@ function formatTimeline(value: any) {
 function getReadiness(racquet: any, jobs: any[]) {
   const activeJob = jobs.find((job) => job.racquet_id === racquet.racquet_id && !['PICKED_UP', 'CANCELLED'].includes(job.status));
   if (activeJob) {
-    return { percent: 100, statusLabel: activeJob.status === 'PAID' ? 'Awaiting pickup' : 'In service' };
+    if (activeJob.status === 'FINISHED' && activeJob.payment_requested_at) return { percent: 80, statusLabel: 'Awaiting payment' };
+    if (activeJob.status === 'PAID') return { percent: 95, statusLabel: 'Awaiting pickup' };
+    return { percent: 55, statusLabel: 'In service' };
   }
 
   if (!racquet?.last_string_date) {
@@ -168,7 +170,14 @@ export default function PlayerDashboard() {
     await refreshData(user);
   }
 
-  const activeJobs = useMemo(() => jobs.filter((job) => !['PICKED_UP', 'CANCELLED'].includes(job.status)), [jobs]);
+  const activeJobs = useMemo(() => {
+    const byRacquet = new Map<string, any>();
+    for (const job of jobs.filter((item) => !['PICKED_UP', 'CANCELLED'].includes(item.status))) {
+      const key = job.racquet_id || job.job_id;
+      if (!byRacquet.has(key)) byRacquet.set(key, job);
+    }
+    return Array.from(byRacquet.values());
+  }, [jobs]);
   const historyJobs = useMemo(() => jobs.filter((job) => ['PICKED_UP', 'CANCELLED'].includes(job.status)), [jobs]);
   const readyForPaymentCount = useMemo(() => jobs.filter((job) => Boolean(job.payment_requested_at) && job.status === 'FINISHED').length, [jobs]);
   const requestedReceivedCount = useMemo(() => jobs.filter((job) => ['REQUESTED', 'RECEIVED'].includes(job.status)).length, [jobs]);
@@ -266,7 +275,7 @@ export default function PlayerDashboard() {
                           <div className="small">GlobeTag {racquet.tag_id}</div>
                         </div>
                         <div className="row wrap racquet-pill-row">
-                          {latestJobForRacquet ? <StatusPill status={latestJobForRacquet.status} paymentRequested={Boolean(latestJobForRacquet.payment_requested_at)} /> : <span className="small">Ready to play</span>}
+                          {latestJobForRacquet && !['PICKED_UP', 'CANCELLED'].includes(latestJobForRacquet.status) ? <StatusPill status={latestJobForRacquet.status} paymentRequested={Boolean(latestJobForRacquet.payment_requested_at)} /> : latestJobForRacquet?.status === 'CANCELLED' ? <StatusPill status={latestJobForRacquet.status} /> : <span className="small">Ready to play</span>}
                         </div>
                       </div>
 
@@ -325,7 +334,7 @@ export default function PlayerDashboard() {
                   <div>
                     <div className="small">Job {formatJobCode(job.job_id)}</div>
                     <h3 className="h3">{racquet?.racquet_name || racquet?.tag_id || 'Racquet'}</h3>
-                    <div className="small">{job.string_type || racquet?.string_type || 'String not recorded'} • {job.is_hybrid ? 'Hybrid setup' : (job.tension || racquet?.tension || '—')}</div>
+                    <div className="small">{job.is_hybrid ? `${job.hybrid_setup?.mains_string || 'No main string'} / ${job.hybrid_setup?.crosses_string || 'No cross string'} • ${job.hybrid_setup?.mains_tension || 'No main tension'} / ${job.hybrid_setup?.crosses_tension || 'No cross tension'}` : `${job.string_type || racquet?.string_type || 'No saved setup'} • ${job.tension || racquet?.tension || 'No tension saved'}`}</div>
                   </div>
                   <StatusPill status={job.status} paymentRequested={Boolean(job.payment_requested_at)} />
                 </div>
@@ -333,6 +342,7 @@ export default function PlayerDashboard() {
                 <JobProgressLine status={job.status} playerView />
                 {job.flagged_issues?.length ? <div className="notice warn">Issue found: {job.flagged_issues.join(', ')}. This job is paused until you approve or cancel it.</div> : null}
                 {job.inspection_note ? <div className="notice warn">Stringer note: {job.inspection_note}</div> : null}
+                {job.flagged_photo_urls?.length ? <div className="notice warn">Inspection photo(s): {job.flagged_photo_urls.join(', ')}</div> : null}
                 {showReminder ? <div className="notice warn">Reminder: your racquet has been waiting for pickup for 2+ days.</div> : null}
 
                 <div className="meta-grid">
@@ -346,7 +356,7 @@ export default function PlayerDashboard() {
                   {job.status === 'FINISHED' && job.payment_requested_at ? <Link className="btn small-btn" href={`/player/payment/${job.job_id}`}><WalletCards size={16} /> Pay now</Link> : null}
                   {job.status === 'PAID' && !job.pickup_confirmed ? <button className="btn small-btn" onClick={() => confirmPickup(job)}>Confirm pickup</button> : null}
                   {job.status === 'AWAITING_PLAYER' ? <button className="btn small-btn" onClick={async () => { await approveFlaggedJob(job.job_id); setNotice('Approved. The stringer can now continue.'); await refreshData(user); }}>Approve & continue</button> : null}
-                  {canCancel ? <button className="btn secondary small-btn" onClick={async () => { await cancelJob(job.job_id, 'PLAYER', 'Cancelled by player'); setNotice('Job cancelled.'); await refreshData(user); }}>Cancel job</button> : null}
+                  {canCancel ? <button className="btn secondary small-btn" onClick={async () => { const reason = window.prompt('Optional cancellation reason', 'Cancelled by player') || 'Cancelled by player'; await cancelJob(job.job_id, 'PLAYER', reason); setNotice('Job cancelled.'); await refreshData(user); }}>Cancel job</button> : null}
                 </div>
               </div>
             );
@@ -386,7 +396,7 @@ export default function PlayerDashboard() {
                   </div>
                 ) : null}
                 {job.player_feedback ? <div className="small">Feedback: {String(job.player_feedback).replaceAll('_', ' ').toLowerCase()}</div> : null}
-                {job.status === 'CANCELLED' ? <div className="small">Cancelled by {String(job.cancelled_by || 'system').toLowerCase()}.</div> : null}
+                {job.status === 'CANCELLED' ? <div className="notice warn">Cancelled by {String(job.cancelled_by || 'system').toLowerCase()}{job.cancel_reason ? `: ${job.cancel_reason}` : ''}</div> : null}
               </div>
             );
           })}

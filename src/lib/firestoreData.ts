@@ -163,6 +163,23 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function stripUndefined<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripUndefined(item)).filter((item) => item !== undefined) as T;
+  }
+
+  if (value && typeof value === 'object') {
+    const clean: AnyRecord = {};
+    Object.entries(value as AnyRecord).forEach(([key, item]) => {
+      if (item === undefined) return;
+      clean[key] = stripUndefined(item);
+    });
+    return clean as T;
+  }
+
+  return value;
+}
+
 function toMillis(value: TimestampLike): number {
   if (!value) return 0;
 
@@ -218,6 +235,13 @@ function normalizeStatus(status?: string): JobStatus {
   if (value === 'FLAGGED') return 'AWAITING_PLAYER';
 
   return value as JobStatus;
+}
+
+
+export const ACTIVE_JOB_STATUSES: JobStatus[] = ['REQUESTED', 'RECEIVED', 'AWAITING_PLAYER', 'IN_PROGRESS', 'FINISHED', 'PAID'];
+
+export function isActiveJobStatus(status?: string) {
+  return ACTIVE_JOB_STATUSES.includes(normalizeStatus(status) as JobStatus);
 }
 
 function normalizeJob(job: AnyRecord): JobRecord {
@@ -370,11 +394,18 @@ export async function getLatestJobForRacquet(racquetId: string): Promise<JobReco
 }
 
 export async function getOpenJobForRacquet(racquetId: string): Promise<JobRecord | null> {
-  const latest = await getLatestJobForRacquet(racquetId);
-  if (!latest) return null;
+  const snap = await getDocs(query(collection(db, 'jobs'), where('racquet_id', '==', racquetId)));
+
+  const jobs: JobRecord[] = snap.docs.map(
+    (d) =>
+      normalizeJob({
+        id: d.id,
+        ...(d.data() as Omit<JobRecord, 'id'>),
+      }) as JobRecord
+  );
 
   const closedStatuses: JobStatus[] = ['PICKED_UP', 'CANCELLED'];
-  return closedStatuses.includes(normalizeStatus(latest.status)) ? null : latest;
+  return sortByNewest(jobs).find((job) => !closedStatuses.includes(normalizeStatus(job.status))) || null;
 }
 
 export async function createRacquet(payload: Partial<RacquetRecord>): Promise<RacquetRecord> {
@@ -400,7 +431,7 @@ export async function createRacquet(payload: Partial<RacquetRecord>): Promise<Ra
     ...payload,
   } as RacquetRecord;
 
-  await setDoc(doc(db, 'racquets', racquet_id), docData, { merge: true });
+  await setDoc(doc(db, 'racquets', racquet_id), stripUndefined(docData), { merge: true });
   return docData;
 }
 
@@ -411,11 +442,11 @@ export async function saveRacquet(payload: Partial<RacquetRecord>) {
 export async function updateRacquet(racquetId: string, data: Partial<RacquetRecord>) {
   await setDoc(
     doc(db, 'racquets', racquetId),
-    {
+    stripUndefined({
       ...data,
       updated_at: nowIso(),
       updated_at_server: serverTimestamp(),
-    },
+    }),
     { merge: true }
   );
 }
@@ -424,6 +455,11 @@ export async function createJob(payload: Partial<JobRecord>): Promise<JobRecord>
   const job_id = payload.job_id || uid('job');
   const createdAt = payload.created_at || nowIso();
   const normalizedStatus = normalizeStatus(payload.status || 'REQUESTED');
+
+  if (payload.racquet_id && isActiveJobStatus(normalizedStatus)) {
+    const existingOpenJob = await getOpenJobForRacquet(payload.racquet_id);
+    if (existingOpenJob) return existingOpenJob;
+  }
 
   const docData: JobRecord = {
     job_id,
@@ -470,7 +506,7 @@ export async function createJob(payload: Partial<JobRecord>): Promise<JobRecord>
     ...payload,
   } as JobRecord;
 
-  await setDoc(doc(db, 'jobs', job_id), docData, { merge: true });
+  await setDoc(doc(db, 'jobs', job_id), stripUndefined(docData), { merge: true });
   return docData;
 }
 
@@ -485,7 +521,7 @@ export async function updateJob(jobId: string, data: Partial<JobRecord> & AnyRec
     patch.status = normalizeStatus(patch.status);
   }
 
-  await setDoc(doc(db, 'jobs', jobId), patch, { merge: true });
+  await setDoc(doc(db, 'jobs', jobId), stripUndefined(patch), { merge: true });
 }
 
 export async function confirmDropOff(jobId: string) {
@@ -496,12 +532,27 @@ export async function confirmDropOff(jobId: string) {
 }
 
 export async function approveFlaggedJob(jobId: string) {
+  const job = await getJob(jobId);
   await updateJob(jobId, {
-    status: 'RECEIVED',
+    status: 'IN_PROGRESS',
     awaiting_player_response: false,
     approved_to_continue: true,
     approved_at: nowIso(),
+    started_at: nowIso(),
   });
+
+  if (job) {
+    await addAlert({
+      type: 'flag_approved',
+      owner_uid: job.owner_uid,
+      owner_name: job.owner_name,
+      shop_id: job.shop_id,
+      job_id: job.job_id,
+      racquet_id: job.racquet_id,
+      note: 'Player approved the flagged racquet. Continue the job without re-inspection.',
+      read: false,
+    });
+  }
 }
 
 export async function cancelJob(jobId: string, cancelledBy: 'PLAYER' | 'STRINGER', reason = '') {
@@ -518,6 +569,17 @@ export async function cancelJob(jobId: string, cancelledBy: 'PLAYER' | 'STRINGER
     cancelled_by: cancelledBy,
     cancel_reason: reason,
     awaiting_player_response: false,
+  });
+
+  await addAlert({
+    type: 'job_cancelled',
+    owner_uid: job.owner_uid,
+    owner_name: job.owner_name,
+    shop_id: job.shop_id,
+    job_id: job.job_id,
+    racquet_id: job.racquet_id,
+    note: `Job cancelled by ${cancelledBy.toLowerCase()}${reason ? `: ${reason}` : ''}`,
+    read: false,
   });
 }
 
@@ -555,19 +617,6 @@ export async function markJobFinished(jobId: string) {
     status: 'FINISHED',
     finished_at: nowIso(),
   });
-
-  if (job.racquet_id) {
-    const racquet = await getRacquetById(job.racquet_id);
-    if (racquet) {
-      await updateRacquet(job.racquet_id, {
-        last_string_date: nowIso(),
-        string_type: job.string_type || racquet.string_type,
-        tension: job.tension || racquet.tension,
-        is_hybrid: Boolean(job.is_hybrid || racquet.is_hybrid),
-        hybrid_setup: job.hybrid_setup || racquet.hybrid_setup || undefined,
-      });
-    }
-  }
 }
 
 export async function markJobPaid(jobId: string) {
@@ -632,6 +681,11 @@ export async function markJobPickedUp(jobId: string) {
     if (racquet) {
       await updateRacquet(job.racquet_id, {
         restring_count: Number(racquet.restring_count || 0) + 1,
+        last_string_date: nowIso(),
+        string_type: job.string_type || racquet.string_type,
+        tension: job.tension || racquet.tension,
+        is_hybrid: Boolean(job.is_hybrid || racquet.is_hybrid),
+        hybrid_setup: job.hybrid_setup || racquet.hybrid_setup || undefined,
       });
     }
   }
@@ -669,7 +723,7 @@ export async function ensureShop(payload?: Partial<ShopRecord>): Promise<ShopRec
     ...payload,
   } as ShopRecord;
 
-  await setDoc(doc(db, 'shops', shopId), shopData, { merge: true });
+  await setDoc(doc(db, 'shops', shopId), stripUndefined(shopData), { merge: true });
   return shopData;
 }
 
@@ -749,4 +803,11 @@ export async function getPendingPayoutTotal(shopId: string) {
   return jobs
     .filter((job) => job.status === 'PAID' && !job.payout_released)
     .reduce((sum, job) => sum + getStringerNetForJob(job), 0);
+}
+export async function listJobsByRacquet(racquetId: string): Promise<JobRecord[]> {
+  const snap = await getDocs(query(collection(db, 'jobs'), where('racquet_id', '==', racquetId)));
+  const items: JobRecord[] = snap.docs.map(
+    (d) => normalizeJob({ id: d.id, ...(d.data() as Omit<JobRecord, 'id'>) }) as JobRecord
+  );
+  return sortByNewest(items);
 }
