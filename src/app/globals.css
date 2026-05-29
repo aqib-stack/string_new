@@ -379,6 +379,7 @@ main { min-height: 100vh; position: relative; z-index: 1; }
   background: rgba(255, 255, 255, 0.03);
   cursor: pointer;
   transition: all .18s ease;
+  color: #fff;
 }
 .role-option:hover { border-color: rgba(255, 255, 255, 0.16); }
 .role-option.active { border-color: var(--volt-line); background: var(--volt-soft); }
